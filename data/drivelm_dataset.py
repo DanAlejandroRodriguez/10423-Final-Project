@@ -41,7 +41,7 @@ class DriveLMDataset(Dataset):
 
         # 1. Process Image
         # DriveLM often has multiple views; here we assume a primary camera
-        image = item['image'] 
+        image = item['image_paths'] 
         if not isinstance(image, Image.Image):
             image = Image.open(image).convert("RGB")
         
@@ -49,8 +49,8 @@ class DriveLMDataset(Dataset):
 
         # 2. Process QA Pairs
         # DriveLM structure usually involves a list of QA objects
-        question = item['question']
-        answer = item['answer']
+        question = item['Q']
+        answer = item['A']
 
         # 3. Process Trajectory
         # Typically represented as a list of [x, y] coordinates
