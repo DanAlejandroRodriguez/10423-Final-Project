@@ -2,15 +2,15 @@ import time
 import re
 import ast
 import torch
-from transformers import AutoProcessor, AutoModelForCausalLM
+from transformers import AutoProcessor, AutoModelForImageTextToText
 
 class GemmaBaselineVLA:
-    def __init__(self, model_id="google/gemma-4-vision-model-id"):
+    def __init__(self, model_id="google/gemma-4-E2B-it"):
         print(f"Loading {model_id} as Baseline...")
         self.processor = AutoProcessor.from_pretrained(model_id)
-        self.model = AutoModelForCausalLM.from_pretrained(
+        self.model = AutoModelForImageTextToText.from_pretrained(
             model_id,
-            torch_dtype=torch.float16,
+            torch_dtype=torch.bfloat16,
             device_map="auto"
         )
         self.model.eval()
@@ -20,8 +20,13 @@ class GemmaBaselineVLA:
         The standard interface for all the models.
         Returns a dictionary containing the parsed components and latency.
         """
-        inputs = self.processor(text=text_prompt, images=images, return_tensors="pt")
-        inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
+        formatted_prompt = self.processor.apply_chat_template(
+            text_prompt, 
+            tokenize=False, 
+            add_generation_prompt=True
+        )
+
+        inputs = self.processor(text=formatted_prompt, images=images, return_tensors="pt").to(self.model.device)
         
         start_time = time.time()
         
