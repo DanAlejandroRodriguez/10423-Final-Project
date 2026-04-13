@@ -67,3 +67,4 @@ data/DriveLM/
 .vscode/
 .idea/
 *.swp
+.env

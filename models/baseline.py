@@ -2,13 +2,13 @@ import time
 import re
 import ast
 import torch
-from transformers import AutoProcessor, AutoModelForImageTextToText
+from transformers import AutoProcessor, AutoModelForMultimodalLM
 
 class GemmaBaselineVLA:
     def __init__(self, model_id="google/gemma-4-E2B-it"):
         print(f"Loading {model_id} as Baseline...")
         self.processor = AutoProcessor.from_pretrained(model_id)
-        self.model = AutoModelForImageTextToText.from_pretrained(
+        self.model = AutoModelForMultimodalLM.from_pretrained(
             model_id,
             torch_dtype=torch.bfloat16,
             device_map="auto"
@@ -26,7 +26,7 @@ class GemmaBaselineVLA:
             add_generation_prompt=True
         )
 
-        inputs = self.processor(text=formatted_prompt, images=images, return_tensors="pt").to(self.model.device)
+        inputs = self.processor(text=formatted_prompt, images=images if images else None, return_tensors="pt").to(self.model.device)
         
         start_time = time.time()
         
@@ -56,7 +56,7 @@ class GemmaBaselineVLA:
         traj_match = re.search(r'<trajectory>(.*?)</trajectory>', raw_text, re.DOTALL)
         
         return {
-            "model_type": "Autoregressive Baseline",
+            "model_type": "Gemma4_Autoregressive_Baseline",
             "latency_seconds": latency,
             "raw_text": raw_text,
             "chain_of_thought": cot_match.group(1).strip() if cot_match else None,

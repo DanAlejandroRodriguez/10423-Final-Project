@@ -27,11 +27,17 @@ class PromptFormatter:
     )
 
     @staticmethod
-    def format(question: str) -> list:
-        """
-        Returns a structured conversation list for Gemma 4's native chat template.
-        """
+    def format(question, num_images=6):
+        user_content = [{"type": "image"} for _ in range(num_images)]
+        user_content.append({"type": "text", "text": f"Question: {question}"})
+
         return [
-            {"role": "system", "content": PromptFormatter.SYSTEM_PROMPT},
-            {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": f"Question: {question}"}]}
+            {
+                "role": "system",
+                "content": [{"type": "text", "text": PromptFormatter.SYSTEM_PROMPT}]
+            },
+            {
+                "role": "user",
+                "content": user_content
+            }
         ]

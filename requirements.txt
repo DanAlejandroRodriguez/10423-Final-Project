@@ -1,7 +1,7 @@
 # Core ML / deep learning
 torch>=2.2.0
 torchvision>=0.17.0
-transformers>=4.40.0       # Gemma 4 and general HuggingFace utilities
+transformers>=4.51.0       # Gemma 4 and general HuggingFace utilities
 accelerate>=0.29.0         # multi-GPU / mixed-precision helpers
 bitsandbytes>=0.43.0       # optional 4-bit / 8-bit quantisation
 
@@ -10,8 +10,7 @@ Pillow>=10.0.0
 opencv-python-headless>=4.9.0
 
 # Dataset / data processing
-nuscenes-devkit>=1.1.11    # nuScenes SDK (DriveLM is derived from nuScenes)
-datasets==2.18.0           # HuggingFace datasets
+datasets>=2.18.0           # HuggingFace datasets
 huggingface_hub>=0.22.0    # For downloading datasets and models directly from HF
 numpy>=1.26.0
 pandas>=2.2.0
@@ -23,3 +22,4 @@ scipy>=1.13.0              # ADE / trajectory metrics
 # Experiment tracking & utilities
 tqdm>=4.66.0
 pyyaml>=6.0.1
+python-dotenv>=1.0.0       # for loading environment variables from .env

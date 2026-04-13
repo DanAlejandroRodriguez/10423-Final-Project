@@ -15,60 +15,110 @@ This module will expose a PyTorch Dataset that:
      ready for the Gemma 4 VLM backbone.
 """
 
+import os
+import json
 import torch
-from torch.utils.data import Dataset, Dataloader
+from torch.utils.data import Dataset
 from PIL import Image
-from datasets import load_dataset
+from huggingface_hub import hf_hub_download
 import torchvision.transforms as T
 
 class DriveLMDataset(Dataset):
-    def __init__(self, dataset_name="OpenDriveLab/DriveLM", split="train", transform=None):
+    def __init__(self, dataset_name="OpenDriveLab/DriveLM", split="train", transform=None, nuscenes_img_dir="data/raw/nuscenes_mini/samples"):
         """
         Initialization for loading DriveLM data.
         """
-        # Load the dataset from HuggingFace
-        self.dataset = load_dataset(dataset_name, split=split)
+        self.img_dir = nuscenes_img_dir
         self.transform = transform if transform else T.Compose([
             T.Resize((224, 224)),
             T.ToTensor(),
         ])
 
+        filename = f"v1_1_{split}_nus.json" if split == "train" else f"v1_1_val_nus_q_only.json"
+        print(f"Downloading/Loading {filename} from Hugging Face...")
+        json_path = hf_hub_download(repo_id=dataset_name, filename=filename, repo_type="dataset")
+
+        with open(json_path, 'r') as f:
+            raw_data = json.load(f)
+
+        self.scenes = {}
+        for scene_id, scene_info in raw_data.items():
+            key_frames = scene_info.get("key_frames", {})
+            for sample_token, frame_info in key_frames.items():
+                
+                qas = []
+                qa_dict = frame_info.get("QA", {})
+                if isinstance(qa_dict, dict):
+                    for category, qa_list in qa_dict.items():
+                        for qa_item in qa_list:
+                            qas.append({
+                                "question": qa_item.get("Q", ""),
+                                "answer": qa_item.get("A", "")
+                            })
+                
+                self.scenes[sample_token] = {
+                    "token": sample_token,
+                    "scene_id": scene_id,
+                    "qas": qas,
+                    "graph": frame_info
+                }
+            
+        self.scene_list = list(self.scenes.values())
+        print(f"Loaded {len(self.scene_list)} unique scenes/keyframes from {split} split.")
+
+        self.camera_views = [
+            'CAM_FRONT', 'CAM_FRONT_LEFT', 'CAM_FRONT_RIGHT',
+            'CAM_BACK', 'CAM_BACK_LEFT', 'CAM_BACK_RIGHT'
+        ]
+
+    def _load_images_for_token(self, sample_token):
+        """Helper to load all 6 camera images for a given scene token."""
+        images = []
+        for cam in self.camera_views:
+            cam_dir = os.path.join(self.img_dir, cam)
+            matched_file = None
+            if os.path.exists(cam_dir):
+                for fname in os.listdir(cam_dir):
+                    if sample_token in fname and fname.endswith(('.jpg', '.png')):
+                        matched_file = os.path.join(cam_dir, fname)
+                        break
+            
+            if matched_file:
+                img = Image.open(matched_file).convert("RGB")
+            else:
+                img = Image.new("RGB", (1600, 900))
+            
+            images.append(img)
+        return images
+
     def __len__(self):
-        return len(self.dataset)
+        return len(self.scene_list)
 
     def __getitem__(self, idx):
-        item = self.dataset[idx]
+        scene_data = self.scene_list[idx]
 
-        # 1. Process Image
-        # DriveLM often has multiple views; here we assume a primary camera
-        image = item['image_paths'] 
-        if not isinstance(image, Image.Image):
-            image = Image.open(image).convert("RGB")
-        
-        image_tensor = self.transform(image)
+        images = self._load_images_for_token(scene_data["token"])
 
-        # 2. Process QA Pairs
-        # DriveLM structure usually involves a list of QA objects
-        question = item['Q']
-        answer = item['A']
+        question = "\\n".join([
+            f"Q: {qa['question']} A: {qa['answer']}" 
+            for qa in scene_data["qas"]
+        ])
 
-        # 3. Process Trajectory
-        # Typically represented as a list of [x, y] coordinates
-        # We convert this to a float tensor
-        trajectory = torch.tensor(item['trajectory'], dtype=torch.float32)
+        trajectory = torch.tensor([], dtype=torch.float32)
 
         return {
-            "image": image_tensor,
+            "images": images,
             "question": question,
-            "answer": answer,
-            "trajectory": trajectory
+            "answer": scene_data["graph"],
+            "trajectory": trajectory,
+            "token": scene_data["token"]
         }
 
 def collate_fn(batch):
     """
     Custom collate to handle varying string lengths and tensors.
     """
-    images = torch.stack([item['image'] for item in batch])
+    images = [item['images'] for item in batch]
     questions = [item['question'] for item in batch]
     answers = [item['answer'] for item in batch]
     trajectories = torch.stack([item['trajectory'] for item in batch])
