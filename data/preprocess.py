@@ -34,7 +34,7 @@ class PromptFormatter:
         return [
             {
                 "role": "system",
-                "content": [{"type": "text", "text": PromptFormatter.SYSTEM_PROMPT}]
+                "content": PromptFormatter.SYSTEM_PROMPT
             },
             {
                 "role": "user",
