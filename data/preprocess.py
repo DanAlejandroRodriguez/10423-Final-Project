@@ -31,8 +31,6 @@ class PromptFormatter:
         """
         Returns a structured conversation list for Gemma 4's native chat template.
         """
-        # Note: The <image> tag is implicitly mapped to standard tokens by
-        # Gemma's chat template processing when images are passed inside the list
         return [
             {"role": "system", "content": PromptFormatter.SYSTEM_PROMPT},
             {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": f"Question: {question}"}]}
