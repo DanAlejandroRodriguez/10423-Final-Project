@@ -18,8 +18,6 @@ This module will expose a PyTorch Dataset that:
 import os
 import json
 import re
-import ast
-import torch
 from torch.utils.data import Dataset
 from PIL import Image
 from huggingface_hub import hf_hub_download
@@ -51,7 +49,7 @@ class DriveLMDataset(Dataset):
                 qas = []
                 qa_dict = frame_info.get("QA", {})
                 if isinstance(qa_dict, dict):
-                    for category, qa_list in qa_dict.items():
+                    for _, qa_list in qa_dict.items():
                         for qa_item in qa_list:
                             qas.append({
                                 "question": qa_item.get("Q", ""),

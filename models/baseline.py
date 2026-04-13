@@ -23,7 +23,8 @@ class GemmaBaselineVLA:
         formatted_prompt = self.processor.apply_chat_template(
             text_prompt, 
             tokenize=False, 
-            add_generation_prompt=True
+            add_generation_prompt=True,
+            enable_thinking=False
         )
 
         inputs = self.processor(text=formatted_prompt, images=images if images else None, return_tensors="pt").to(self.model.device)
