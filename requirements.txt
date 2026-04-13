@@ -12,6 +12,7 @@ opencv-python-headless>=4.9.0
 # Dataset / data processing
 nuscenes-devkit>=1.1.11    # nuScenes SDK (DriveLM is derived from nuScenes)
 datasets>=2.18.0           # HuggingFace datasets
+huggingface_hub>=0.22.0    # For downloading datasets and models directly from HF
 numpy>=1.26.0
 pandas>=2.2.0
 
