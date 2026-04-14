@@ -11,6 +11,7 @@ DriveLM is built on top of nuScenes and provides:
 
 import os
 import json
+import re
 import torch
 from torch.utils.data import Dataset
 from PIL import Image
@@ -96,36 +97,39 @@ class DriveLMDataset(Dataset):
             images.append(img)
             
         # 2. Extract Question and Answer strings
-        question = ""
-        answer = ""
-        
-        # Support v1.1 nested QA hierarchy
         qa_pairs = item.get("QA_pairs", {})
-        planning_qas = qa_pairs.get("planning", [])
         
-        # Prioritize picking a question related to ego vehicle "actions" for target evaluation
-        for qa in planning_qas:
-            if "actions" in qa.get("Q", "").lower():
-                question = qa.get("Q", "")
-                answer = qa.get("A", "")
-                break
-                
-        # Fallback to the very first planning question if "actions" wasn't found
-        if not question and planning_qas:
-            question = planning_qas[-1].get("Q", "")  # Or use the last summary question
-            answer = planning_qas[-1].get("A", "")
-            
-        # Legacy v1.0 fallback just in case
+        # Collect ALL questions from perception, prediction, planning, behavior
+        all_qas = []
+        for category, qas in qa_pairs.items():
+            if isinstance(qas, list):
+                for qa in qas:
+                    if qa.get("Q", "").strip():
+                        all_qas.append(f"Q: {qa['Q']}")
+                        
+        # Join them to form a unified question context
+        question = "\n".join(all_qas)
         if not question:
-            question = item.get("question", "")
-            answer = item.get("answer", "")
+            question = "Describe the autonomous driving scene."
         
-        # 3. Extract Trajectory data
-        traj_list = item.get("trajectory", [])
+        # 3. Extract the target action Answer and Trajectory
+        planning_qas = qa_pairs.get("planning", [])
+        answer = ""
+        traj_list = []
         
-        # Fallback empty trajectory for inference or incomplete data (e.g. 6.4s @ 2Hz = 13 waypoints)
+        for qa in planning_qas:
+            text_ans = qa.get("A", "")
+            if "actions" in qa.get("Q", "").lower():
+                answer = text_ans
+                
+            # Extract trajectory coordinates if present
+            matches = re.findall(r'\(\s*(-?\d+\.?\d*)\s*,\s*(-?\d+\.?\d*)\s*\)', text_ans)
+            if matches:
+                traj_list = [[float(x), float(y)] for x, y in matches]
+                
+        # Simple fallback for empty trajectories (allows evaluators to handle dynamic lengths safely)
         if not traj_list:
-            traj_list = [[0.0, 0.0] for _ in range(13)]
+            traj_list = [[0.0, 0.0]]
             
         trajectory = torch.tensor(traj_list, dtype=torch.float32)
         
