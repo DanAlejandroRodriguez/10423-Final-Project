@@ -96,8 +96,29 @@ class DriveLMDataset(Dataset):
             images.append(img)
             
         # 2. Extract Question and Answer strings
-        question = item.get("question", "")
-        answer = item.get("answer", "")
+        question = ""
+        answer = ""
+        
+        # Support v1.1 nested QA hierarchy
+        qa_pairs = item.get("QA_pairs", {})
+        planning_qas = qa_pairs.get("planning", [])
+        
+        # Prioritize picking a question related to ego vehicle "actions" for target evaluation
+        for qa in planning_qas:
+            if "actions" in qa.get("Q", "").lower():
+                question = qa.get("Q", "")
+                answer = qa.get("A", "")
+                break
+                
+        # Fallback to the very first planning question if "actions" wasn't found
+        if not question and planning_qas:
+            question = planning_qas[-1].get("Q", "")  # Or use the last summary question
+            answer = planning_qas[-1].get("A", "")
+            
+        # Legacy v1.0 fallback just in case
+        if not question:
+            question = item.get("question", "")
+            answer = item.get("answer", "")
         
         # 3. Extract Trajectory data
         traj_list = item.get("trajectory", [])
