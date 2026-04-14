@@ -10,7 +10,7 @@ class GemmaBaselineVLA:
         self.processor = AutoProcessor.from_pretrained(model_id)
         self.model = AutoModelForImageTextToText.from_pretrained(
             model_id,
-            torch_dtype=torch.bfloat16,
+            dtype=torch.bfloat16,
             device_map="auto"
         )
         self.model.eval()
