@@ -107,7 +107,18 @@ source .venv/bin/activate   # Windows: .venv\Scripts\activate
 # 3. Install dependencies
 pip install -r requirements.txt
 
-# 4. Download DriveLM data — see data/README.md for instructions
+# 4. Download DriveLM data 
+# a) Get nuScenes images (mini or full) from: https://www.nuscenes.org/download
+#    Extract the archive directly into the `dataset/images/` directory.
+# b) Generate a HuggingFace Read token at: https://huggingface.co/settings/tokens
+# c) Accept the DriveLM agreement at: https://huggingface.co/datasets/OpenDriveLab/DriveLM
+# d) Download the DriveLM format JSON annotations (Linux/macOS example):
+# replace YOUR_HF_TOKEN with your actual HuggingFace token
+wget --header="Authorization: Bearer YOUR_HF_TOKEN" -O dataset/v1_1_train_nus.json "https://huggingface.co/datasets/OpenDriveLab/DriveLM/resolve/main/v1_1_train_nus.json?download=true"
+wget --header="Authorization: Bearer YOUR_HF_TOKEN" -O dataset/v1_1_val_nus_q_only.json "https://huggingface.co/datasets/OpenDriveLab/DriveLM/resolve/main/v1_1_val_nus_q_only.json?download=true"
+
+# Run the benchmark
+python benchmark.py -model baseline --ann_file "dataset/v1_1_train_nus.json"
 ```
 
 ---
