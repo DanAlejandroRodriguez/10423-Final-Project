@@ -10,7 +10,7 @@ Pillow>=10.0.0
 opencv-python-headless>=4.9.0
 
 # Dataset / data processing
-nuscenes-devkit>=1.1.11    # nuScenes SDK (DriveLM is derived from nuScenes)
+# nuscenes-devkit>=1.1.11  # Removed: Fails to build on Python 3.12+. Our dataloader parses JSON manually, so we don't need it.
 datasets>=2.18.0           # HuggingFace datasets
 huggingface_hub>=0.22.0    # For downloading datasets and models directly from HF
 numpy>=1.26.0
