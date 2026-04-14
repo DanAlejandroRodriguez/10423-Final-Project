@@ -27,11 +27,15 @@ class PromptFormatter:
     )
 
     @staticmethod
-    def format(question: str) -> list:
+    def format(question: str, num_images: int = 6) -> list:
         """
         Returns a structured conversation list for Gemma 4's native chat template.
+        Automatically maps the required number of image placeholders for multi-camera input.
         """
+        content = [{"type": "image"} for _ in range(num_images)]
+        content.append({"type": "text", "text": f"Question: {question}"})
+        
         return [
-            {"role": "system", "content": PromptFormatter.SYSTEM_PROMPT},
-            {"role": "user", "content": f"<image>\nQuestion: {question}"}
+            {"role": "system", "content": [{"type": "text", "text": PromptFormatter.SYSTEM_PROMPT}]},
+            {"role": "user", "content": content}
         ]
