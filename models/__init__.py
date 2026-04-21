@@ -1,6 +1,6 @@
 """
-models package — Gemma 4 VLA backbone and DAG attention mask components.
+models package — Qwen2.5-VL backbone and DAG attention mask components.
 """
-from .baseline import GemmaBaselineVLA
+from .baseline import QwenBaselineVLA
 
-__all__ = ["GemmaBaselineVLA"]
+__all__ = ["QwenBaselineVLA"]

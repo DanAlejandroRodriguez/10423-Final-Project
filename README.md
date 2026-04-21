@@ -24,7 +24,7 @@ We aim to use the DriveLM dataset, derived from nuScenes, which feature multi-se
 
 The FastDriveCoT paper trains a VLA model utilizing a base Qwen LLM model. Our current plan is to utilize the DriveLM dataset to be able to train the VLA model to observe surroundings on real-world driving logs, and validate the MCTS-guided policies by measuring CoT generation latency, meta-action Intersection Over Union (IOU), and trajectory Average Displacement Error (ADE) over a 6.4-second horizon.
 
-Our project relies on pre-existing open-source foundations. We will utilize the Gemma 4 model as our baseline VLA architecture. Second, as a stretch goal, we intend to integrate Block-Sparse FlashAttention (BSFA) to further optimize memory bandwidth as this was a limitation that FastDriveCoT cites.
+Our project relies on pre-existing open-source foundations. We will utilize the Qwen2.5-VL model as our baseline VLA architecture. Second, as a stretch goal, we intend to integrate Block-Sparse FlashAttention (BSFA) to further optimize memory bandwidth as this was a limitation that FastDriveCoT cites.
 
 ---
 
@@ -124,4 +124,4 @@ pip install --no-deps nuscenes-devkit
 - MCTS for LLMs — Monte Carlo Tree Search for decision-making in language models
 - DriveLM — Driving with Graph Visual Question Answering
 - BSFA — Block-Sparse FlashAttention for efficient sparse attention
-- Gemma 4 — Google DeepMind open-weights multimodal model
+- Qwen2.5-VL — Alibaba open-weights multimodal model

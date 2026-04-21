@@ -2,13 +2,13 @@ import time
 import re
 import ast
 import torch
-from transformers import AutoProcessor, AutoModelForMultimodalLM
+from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
 
-class GemmaBaselineVLA:
-    def __init__(self, model_id="google/gemma-4-E2B-it"):
+class QwenBaselineVLA:
+    def __init__(self, model_id="Qwen/Qwen2.5-VL-7B-Instruct"):
         print(f"Loading {model_id} as Baseline...")
         self.processor = AutoProcessor.from_pretrained(model_id)
-        self.model = AutoModelForMultimodalLM.from_pretrained(
+        self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
             model_id,
             torch_dtype=torch.bfloat16,
             device_map="auto"
@@ -23,8 +23,7 @@ class GemmaBaselineVLA:
         formatted_prompt = self.processor.apply_chat_template(
             text_prompt, 
             tokenize=False, 
-            add_generation_prompt=True,
-            enable_thinking=False
+            add_generation_prompt=True
         )
 
         inputs = self.processor(text=formatted_prompt, images=images if images else None, return_tensors="pt").to(self.model.device)
@@ -57,7 +56,7 @@ class GemmaBaselineVLA:
         traj_match = re.search(r'<trajectory>(.*?)</trajectory>', raw_text, re.DOTALL)
         
         return {
-            "model_type": "Gemma4_Autoregressive_Baseline",
+            "model_type": "Qwen2.5VL_Autoregressive_Baseline",
             "latency_seconds": latency,
             "raw_text": raw_text,
             "chain_of_thought": cot_match.group(1).strip() if cot_match else None,
