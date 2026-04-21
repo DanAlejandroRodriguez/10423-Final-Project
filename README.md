@@ -104,10 +104,14 @@ cd 10423-Final-Project
 python -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
 
-# 3. Install dependencies
-pip install -r requirements.txt
+# 3. Install GEOS (System Dependency for nuScenes-devkit on macOS)
+brew install geos
 
-# 4. Download DriveLM data — see data/README.md for instructions
+# 4. Install dependencies
+pip install -r requirements.txt
+pip install --no-deps nuscenes-devkit
+
+# 5. Download DriveLM data — see data/README.md for instructions
 ```
 
 ---

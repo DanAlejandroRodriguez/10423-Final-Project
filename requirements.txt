@@ -19,7 +19,8 @@ pandas>=2.2.0
 pycocotools>=2.0.7         # for IOU calculations
 scipy>=1.13.0              # ADE / trajectory metrics
 
-# Experiment tracking & utilities
-tqdm>=4.66.0
-pyyaml>=6.0.1
-python-dotenv>=1.0.0       # for loading environment variables from .env
+# nuScenes dependencies (explicit to avoid devkit downgrade conflicts)
+pyquaternion>=0.9.9
+Shapely>=2.0.0
+cachetools
+fire
