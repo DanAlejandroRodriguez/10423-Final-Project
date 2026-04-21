@@ -1,45 +1,42 @@
 # DriveLM Dataset Setup
 
-The dataset consists of two parts: DriveLM text/annotations and nuScenes images. The text and annotations are handled automatically via the Hugging Face `datasets` library. We only need to manually download the images from nuScenes.
+Two parts: DriveLM annotations (automatic) and nuScenes images (manual download).
 
-Here is the breakdown of the setup.
+## 1. DriveLM Annotations
+Handled automatically. `DriveLMDataset` downloads the JSON from `OpenDriveLab/DriveLM` on Hugging Face at runtime.
 
-### 1. DriveLM (The Text / Q&A)
-The Hugging Face `datasets` library handles this automatically. When the code calls `load_dataset("OpenDriveLab/DriveLM")` in `drivelm_dataset.py`, it downloads the JSON graphs and text questions directly into memory. 
+## 2. nuScenes v1.0-trainval
 
-### 2. nuScenes (The Images)
-DriveLM uses the original nuScenes dataset images, which must be downloaded directly from the creators of nuScenes.
+1. Go to [nuscenes.org/download](https://www.nuscenes.org/download), create a free account, and accept the terms.
+2. Download **v1.0-trainval** — you need:
+   - `v1.0-trainval_meta.tgz` (metadata)
+   - Any blob files you need for images (`v1.0-trainval01_blobs.tgz` through `v1.0-trainval10_blobs.tgz`)
+3. Place everything under `data/raw/nuscenes/` and extract. The metadata tarball will unpack as `v1.0-trainval/`. The blobs unpack into `samples/`.
 
-**How to download nuScenes:**
-1. Go to **[nuscenes.org/download](https://www.nuscenes.org/download)**.
-2. Create a free account and agree to their academic terms of use.
-3. Scroll down to the **"Full dataset (v1.0)"** section.
-4. Download the ZIP file for the **v1.0-mini** dataset. (Recommend starting with the "Mini" split, which is about 4 GB, before scaling to the full dataset).
-
-### 3. Folder Setup
-Once you have the `v1.0-mini.zip` file:
-
-1. Unzip the file. Inside, you will see several folders, including the `samples/` folder which contains the 6 surround-camera images (e.g., `CAM_FRONT`, `CAM_BACK`).
-2. Navigate to your shared Google Drive or local workspace.
-3. Create a new folder at `data/raw/nuscenes_mini`.
-4. Run or manually move the unzipped folders (specifically the `samples/` folder) into the newly created folder.
-
-**The structure should look like this:**
-```text
-data/
-└── raw/
-    └── nuscenes_mini/
-        ├── samples/
-        │   ├── CAM_FRONT/
-        │   │   ├── n015-2018-07-24-11-22-45+0800__CAM_FRONT__1532402927612460.jpg
-        │   │   └── ...
-        │   ├── CAM_FRONT_RIGHT/
-        │   └── ...
+Expected structure:
+```
+data/raw/nuscenes/
+├── v1.0-trainval/
+│   ├── category.json
+│   ├── ego_pose.json
+│   ├── sample.json
+│   ├── sample_data.json
+│   └── ... (all metadata files)
+└── samples/
+    ├── CAM_FRONT/
+    ├── CAM_FRONT_LEFT/
+    ├── CAM_FRONT_RIGHT/
+    ├── CAM_BACK/
+    ├── CAM_BACK_LEFT/
+    └── CAM_BACK_RIGHT/
 ```
 
-### 4. Connecting it to the Code
-When executing the pipeline, mount your Google Drive (if in Colab) or configure the local relative path:
+## 3. Usage
 
 ```python
-NUSCENES_IMAGE_DIR = "data/raw/nuscenes_mini"
+from data.drivelm_dataset import DriveLMDataset
+
+dataset = DriveLMDataset(split="train", nuscenes_img_dir="data/raw/nuscenes/samples")
 ```
+
+The metadata tarball is auto-extracted by `DriveLMDataset` if the `v1.0-trainval/` folder is missing but the `.tgz` is present.

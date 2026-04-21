@@ -17,10 +17,13 @@ This module will expose a PyTorch Dataset that:
 
 import os
 import json
-import re
+import numpy as np
+import tarfile
+from pyquaternion import Quaternion
 from torch.utils.data import Dataset
 from PIL import Image
 from huggingface_hub import hf_hub_download
+from nuscenes.nuscenes import NuScenes
 
 class DriveLMDataset(Dataset):
     CAMERA_VIEWS = [
@@ -28,11 +31,32 @@ class DriveLMDataset(Dataset):
         'CAM_BACK', 'CAM_BACK_LEFT', 'CAM_BACK_RIGHT'
     ]
 
-    def __init__(self, dataset_name="OpenDriveLab/DriveLM", split="train", nuscenes_img_dir="data/raw/nuscenes_mini/samples"):
+    def __init__(self, dataset_name="OpenDriveLab/DriveLM", split="train", nuscenes_img_dir="data/raw/nuscenes/samples"):
         """
         Initialization for loading DriveLM data.
         """
         self.img_dir = nuscenes_img_dir
+        self.nusc_version = "v1.0-mini" if "mini" in nuscenes_img_dir else "v1.0-trainval"
+        
+        dataroot = os.path.dirname(nuscenes_img_dir)
+        version_dir = os.path.join(dataroot, self.nusc_version)
+        
+        if not os.path.exists(os.path.join(version_dir, 'category.json')):
+            meta_tar = os.path.join(dataroot, f"{self.nusc_version}_meta.tgz")
+            if os.path.exists(meta_tar):
+                print(f"Extracting metadata from {meta_tar} to {dataroot}...")
+                with tarfile.open(meta_tar, "r:gz") as tar:
+                    # NuScenes tar usually creates the v1.0-trainval folder inside
+                    tar.extractall(path=dataroot)
+                print("Metadata extraction complete!")
+            else:
+                print(f"Error: Neither the extracted {self.nusc_version} folder nor {self.nusc_version}_meta.tgz found in {dataroot}.")
+
+        try:
+            self.nusc = NuScenes(version=self.nusc_version, dataroot=dataroot, verbose=False)
+        except Exception as e:
+            print(f"Warning: Could not load nuScenes devkit: {e}")
+            self.nusc = None
 
         filename = f"v1_1_{split}_nus.json" if split == "train" else f"v1_1_val_nus_q_only.json"
         print(f"Downloading/Loading {filename} from Hugging Face...")
@@ -60,23 +84,48 @@ class DriveLMDataset(Dataset):
                     "token": sample_token,
                     "scene_id": scene_id,
                     "qas": qas,
-                    "trajectory": self._extract_trajectory(qa_dict),
+                    "trajectory": self._extract_trajectory(sample_token),
                     "graph": frame_info
                 }
             
         self.scene_list = list(self.scenes.values())
         print(f"Loaded {len(self.scene_list)} unique scenes/keyframes from {split} split.")
-        has_traj = sum(1 for s in self.scene_list if s["trajectory"])
-        print(f"  → {has_traj}/{len(self.scene_list)} frames have parseable trajectories.")
+        
+        self.scene_list = [s for s in self.scene_list if len(s.get("trajectory", [])) > 0]
+        print(f"  → Filtered down to {len(self.scene_list)} frames that have native NuScenes trajectories.")
 
-    def _extract_trajectory(self, qa_dict):
-        planning_qas = qa_dict.get("planning", [])
-        for qa in planning_qas:
-            answer = qa.get("A", "")
-            matches = re.findall(r'\(\s*(-?\d+\.?\d*)\s*,\s*(-?\d+\.?\d*)\s*\)', answer)
-            if matches:
-                return [[float(x), float(y)] for x, y in matches]
-        return []
+    def _extract_trajectory(self, sample_token, future_steps=6):
+        """Extract future trajectories using nuScenes devkit."""
+        if self.nusc is None:
+            return []
+        
+        try:
+            sample = self.nusc.get('sample', sample_token)
+            sample_data = self.nusc.get('sample_data', sample['data']['CAM_FRONT'])
+            ego_pose = self.nusc.get('ego_pose', sample_data['ego_pose_token'])
+            
+            ref_translation = np.array(ego_pose['translation'])
+            ref_rotation = Quaternion(ego_pose['rotation']).rotation_matrix
+            
+            trajectory = []
+            curr_sample = sample
+            for _ in range(future_steps):
+                if curr_sample['next'] == '':
+                    break
+                curr_sample = self.nusc.get('sample', curr_sample['next'])
+                curr_sd = self.nusc.get('sample_data', curr_sample['data']['CAM_FRONT'])
+                next_pose = self.nusc.get('ego_pose', curr_sd['ego_pose_token'])
+                
+                glob_pos = np.array(next_pose['translation'])
+                
+                local_pos = glob_pos - ref_translation
+                local_pos = np.dot(np.linalg.inv(ref_rotation), local_pos)
+                
+                trajectory.append([float(local_pos[0]), float(local_pos[1])])
+                
+            return trajectory
+        except Exception:
+            return []
 
     def _load_images_for_token(self, sample_token):
         """Helper to load all 6 camera images for a given scene token."""
