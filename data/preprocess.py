@@ -5,8 +5,8 @@ DriveLM feature extraction, tokenisation, and prompting helpers.
 
 This module provides:
   - Prompt formatting to enforce a strict Data Contract (PromptFormatter).
-  - Image pre-processing transforms compatible with Gemma 4's vision encoder.
-  - Text tokenisation helpers that wrap the Gemma 4 tokeniser.
+  - Image pre-processing transforms compatible with Qwen2.5-VL's vision encoder.
+  - Text tokenisation helpers that wrap the Qwen2.5-VL tokeniser.
   - Scene-difficulty estimation used by the adaptive-compute router.
   - Trajectory normalisation / de-normalisation utilities.
 """

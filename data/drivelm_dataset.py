@@ -12,7 +12,7 @@ This module will expose a PyTorch Dataset that:
   1. Reads the DriveLM JSON annotation files.
   2. Loads the corresponding nuScenes sensor frames.
   3. Returns (image_tensors, question, answer, trajectory) tuples
-     ready for the Gemma 4 VLM backbone.
+     ready for the Qwen2.5-VL backbone.
 """
 
 import os
