@@ -4,7 +4,7 @@ from .baseline import QwenBaselineVLA
 
 class FastDriveVLA(QwenBaselineVLA):
     def __init__(self, model_id="Qwen/Qwen2.5-VL-7B-Instruct"):
-        super().__init__(model_id=model_id)
+        super().__init__(model_id=model_id, attn_implementation="sdpa")
 
     def build_dag_attention_mask(self, prefix_length, branch_lengths, ancestor_mask=None, padding_lengths=None):
         """

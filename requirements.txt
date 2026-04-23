@@ -3,6 +3,7 @@ torch>=2.2.0
 torchvision>=0.17.0
 transformers>=4.49.0       # Qwen2.5-VL and general HuggingFace utilities
 accelerate>=0.29.0         # multi-GPU / mixed-precision helpers
+xformers>=0.0.26           # memory-efficient attention for custom DAG masks via SDPA
 
 # Vision utilities
 Pillow>=10.0.0
