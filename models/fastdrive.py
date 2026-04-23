@@ -11,8 +11,9 @@ class FastDriveVLA(QwenBaselineVLA):
         Builds a 2D boolean causal attention mask for parallel CoT decoding.
 
         Per FastDriveCoT (Eq. 1): token in field B attends to field A only if A
-        is an ancestor of B in the dependency graph. The prefix is a universal
-        ancestor. Padding tokens are masked out from all other tokens.
+        is an ancestor of B in the dependency graph. Fixed (prefix) tokens are
+        visible to all following tokens regardless of dependencies. Padding
+        tokens are invisible to every other token in the sequence.
         """
         total_len = prefix_length + sum(branch_lengths)
         mask = torch.zeros(total_len, total_len, dtype=torch.bool)

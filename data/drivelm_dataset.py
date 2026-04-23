@@ -46,7 +46,6 @@ class DriveLMDataset(Dataset):
             if os.path.exists(meta_tar):
                 print(f"Extracting metadata from {meta_tar} to {dataroot}...")
                 with tarfile.open(meta_tar, "r:gz") as tar:
-                    # NuScenes tar usually creates the v1.0-trainval folder inside
                     tar.extractall(path=dataroot)
                 print("Metadata extraction complete!")
             else:
@@ -119,7 +118,7 @@ class DriveLMDataset(Dataset):
                 glob_pos = np.array(next_pose['translation'])
                 
                 local_pos = glob_pos - ref_translation
-                local_pos = np.dot(np.linalg.inv(ref_rotation), local_pos)
+                local_pos = ref_rotation.T @ local_pos
                 
                 trajectory.append([float(local_pos[0]), float(local_pos[1])])
                 
