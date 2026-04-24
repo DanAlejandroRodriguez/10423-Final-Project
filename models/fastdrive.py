@@ -47,6 +47,13 @@ class FastDriveVLA(QwenBaselineVLA):
                 torch.ones(real_len, real_len, dtype=torch.bool)
             )
 
+            pad_start = real_end
+            pad_end = start + branch_len
+            if pad_start < pad_end:
+                mask[pad_start:pad_end, pad_start:pad_end] = torch.eye(
+                    pad_end - pad_start, dtype=torch.bool
+                )
+
         return mask
 
     def build_dag_position_ids(self, prefix_length, branch_lengths):
@@ -87,6 +94,7 @@ class FastDriveVLA(QwenBaselineVLA):
         if position_ids is None:
             position_ids = self.build_dag_position_ids(prefix_length, branch_lengths)
         position_ids = position_ids.to(device=self.model.device)
+        input_ids = input_ids.to(device=self.model.device)
 
         with torch.no_grad():
             outputs = self.model(
