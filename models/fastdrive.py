@@ -6,7 +6,7 @@ class FastDriveVLA(QwenBaselineVLA):
     def __init__(self, model_id="Qwen/Qwen2.5-VL-7B-Instruct"):
         super().__init__(model_id=model_id, attn_implementation="sdpa")
 
-    def build_dag_attention_mask(self, prefix_length, branch_lengths, ancestor_mask=None, padding_lengths=None):
+    def build_dag_attention_mask(self, prefix_length, ancestor_lengths, branch_lengths, ancestor_mask=None, padding_lengths=None):
         """
         Builds a 2D boolean causal attention mask for parallel CoT decoding.
 
@@ -15,15 +15,35 @@ class FastDriveVLA(QwenBaselineVLA):
         visible to all following tokens regardless of dependencies. Padding
         tokens are invisible to every other token in the sequence.
         """
-        total_len = prefix_length + sum(branch_lengths)
+        total_len = prefix_length + sum(ancestor_lengths) + sum(branch_lengths)
         mask = torch.zeros(total_len, total_len, dtype=torch.bool)
 
         mask[:prefix_length, :prefix_length] = torch.tril(
             torch.ones(prefix_length, prefix_length, dtype=torch.bool)
         )
 
-        offsets = []
         offset = prefix_length
+        if ancestor_lengths is not None:
+            ancestor_offsets = []
+            ancestor_offset = prefix_length
+            for ancestor_len in ancestor_lengths:
+                ancestor_offset.append(ancestor_offset)
+                ancestor_offsets += ancestor_len
+        
+            ancestor_padding_lengths = ancestor_padding_lengths or [0] * len(ancestor_lengths)
+
+            for i, (ancestor_len, pad_len, start) in enumerate(zip(ancestor_lengths, ancestor_padding_lengths, ancestor_offsets)):
+                real_len = ancestor_len - pad_len
+                real_end = start + real_len
+
+                mask[start:real_end, :start-1] = True
+                mask[start:real_end, start:real_end] = torch.tril(
+                    torch.ones(real_len, real_len, dtype=torch.bool)
+                )
+        
+            offset = ancestor_lengths
+
+        offsets = []
         for branch_len in branch_lengths:
             offsets.append(offset)
             offset += branch_len
@@ -39,8 +59,8 @@ class FastDriveVLA(QwenBaselineVLA):
             if ancestor_mask is not None:
                 for j, is_ancestor in enumerate(ancestor_mask[i]):
                     if is_ancestor:
-                        anc_start = offsets[j]
-                        anc_real_end = anc_start + branch_lengths[j] - padding_lengths[j]
+                        anc_start = ancestor_offsets[j]
+                        anc_real_end = anc_start + ancestor_lengths[j] - ancestor_padding_lengths[j]
                         mask[start:real_end, anc_start:anc_real_end] = True
 
             mask[start:real_end, start:real_end] = torch.tril(
@@ -54,6 +74,21 @@ class FastDriveVLA(QwenBaselineVLA):
                     pad_end - pad_start, dtype=torch.bool
                 )
 
+        return mask
+    
+    def build_dag_ancestor_mask(self, prefix_length, num_ancestors, num_branches, padding_lengths=None):
+        """
+        Builds a 2D ancestor mask for DAG scheduler
+        """
+        total_len = num_ancestors + num_branches
+        mask = torch.zeros(total_len, total_len, dtype=torch.bool)
+        mask[0:num_ancestors, 0:num_ancestors] = torch.tril(
+            torch.ones(num_ancestors, num_ancestors, dtype=torch.bool), diagonal=-1
+        )
+        for i in range(num_branches):
+            offset = num_ancestors
+            for j in range(num_ancestors):
+                mask[offset + i, j] = True
         return mask
 
     def build_dag_position_ids(self, prefix_length, branch_lengths):
@@ -71,18 +106,20 @@ class FastDriveVLA(QwenBaselineVLA):
         ])
         return torch.cat([prefix_pos, branch_pos]).unsqueeze(0)
 
-    def parallel_forward_pass(self, input_ids, branch_lengths, ancestor_mask=None, padding_lengths=None, position_ids=None):
+    def parallel_forward_pass(self, input_ids, ancestor_lengths, branch_lengths, ancestor_mask=None, padding_lengths=None, position_ids=None):    
         """
         Executes a single forward pass with the DAG attention mask.
 
         The DAG scheduler constructs input_ids by concatenating
-        [prefix_tokens, branch_1_tokens, ..., branch_n_tokens].
+        [prefix_tokens, ancestors, branch_1_tokens, ..., branch_n_tokens].
         Returns logits of shape (1, total_seq_len, vocab_size).
         """
         prefix_length = input_ids.shape[1] - sum(branch_lengths)
+        if ancestor_mask is not None:
+             prefix_length -= sum(ancestor_lengths)
 
         bool_mask = self.build_dag_attention_mask(
-            prefix_length, branch_lengths, ancestor_mask, padding_lengths
+            prefix_length, ancestor_lengths, branch_lengths, ancestor_mask, padding_lengths
         )
         bool_mask = bool_mask.to(device=self.model.device)
 
@@ -105,3 +142,7 @@ class FastDriveVLA(QwenBaselineVLA):
             )
 
         return outputs.logits
+
+
+    def build_dag(self, branch_lengths):
+        # per token in the prompt
