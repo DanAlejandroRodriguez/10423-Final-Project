@@ -28,9 +28,14 @@ def main():
         print(f"Limiting evaluation to {n_samples} samples.")
 
     for i in range(n_samples):
-        print(f"Evaluating sample {i+1}/{n_samples}...")
+        print(f"\n--- Evaluating sample {i+1}/{n_samples} ---")
         sample = dataset[i]
         result = model.generate_trajectory(sample["images"], sample["question"])
+        
+        print("\n--- MODEL GENERATION ---")
+        print(result.get("raw_text", ""))
+        print("------------------------\n")
+        
         evaluator.add(result, sample["gt_trajectory"], sample["answer"])
 
     # Print results and save
