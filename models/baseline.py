@@ -3,6 +3,8 @@ import re
 import ast
 import torch
 from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
+from search.mcts import MCTSNode
+import torch.nn.functional as F
 
 class QwenBaselineVLA:
     def __init__(self, model_id="Qwen/Qwen2.5-VL-7B-Instruct", attn_implementation="sdpa"):
@@ -49,25 +51,35 @@ class QwenBaselineVLA:
         raw_text = self.processor.decode(generated_tokens, skip_special_tokens=True)
         
         return self._parse_output(raw_text, latency)
+        
+    def mcts_generate(self, inputs, max_new_tokens=512, iterations=50):
+        """
+        Runs MCTS on the input image and prompt
+        Returns the action with the highest number of visits
+        """
+        root = MCTSNode(state=inputs)
 
-    def _parse_output(self, raw_text, latency):
-        """Extracts the specific tags for evaluation."""
-        cot_match = re.search(r'<cot>(.*?)</cot>', raw_text, re.DOTALL)
-        action_match = re.search(r'<action>(.*?)</action>', raw_text, re.DOTALL)
-        traj_match = re.search(r'<trajectory>(.*?)</trajectory>', raw_text, re.DOTALL)
-        
-        return {
-            "model_type": "Qwen2.5VL_Autoregressive_Baseline",
-            "latency_seconds": latency,
-            "raw_text": raw_text,
-            "chain_of_thought": cot_match.group(1).strip() if cot_match else None,
-            "meta_action": action_match.group(1).strip() if action_match else None,
-            "trajectory": self._parse_coordinates(traj_match.group(1)) if traj_match else []
-        }
-        
-    def _parse_coordinates(self, traj_string):
-        """Safely converts string '[[x,y], ...]' into a Python list of floats."""
-        try:
-            return ast.literal_eval(traj_string.strip())
-        except (ValueError, SyntaxError):
-            return []
+        for _ in range(iterations):
+            node = root
+
+            # select a child node
+            while node.children:
+                node = max(node.children.values(), key=lambda n: n.ucb_score(root.visits))
+
+            start_time = time.time()
+
+            # get candidate actions through diverse sampling
+            actions = self.model.generate(
+                **inputs,
+                do_sample=True,
+                temperateure=0.7,
+                top_p = 0.9,
+                num_return_sequences=5,
+                max_new_tokens=max_new_tokens
+            )
+
+            latency = time.time() - start_time
+
+            for action in actions:
+                new_state = node.state + action
+                no
