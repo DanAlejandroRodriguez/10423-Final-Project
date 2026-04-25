@@ -82,4 +82,67 @@ class QwenBaselineVLA:
 
             for action in actions:
                 new_state = node.state + action
-                no
+                node.children[action] = MCTSNode(state=new_state, parent=node)
+
+                # evaluate the state of the child node
+                verifier_score = self.self_evaluate_state(self, inputs, node, action)
+                reward = node.calculate_reward(verifier_score, latency)
+
+                node.children[action].value = reward
+                node.children[action].visits = 1
+
+                while node:
+                    node.visits += 1
+                    node.value += reward
+                    node = node.parent
+        
+        return max(root.children.items(), key=lambda item: item[1].visits)[0]
+
+    def self_evaluate_state(self, inputs, node, action):
+        # define evaluation prompt
+        eval_prompt = f""" Task: Given an action and the current state, score the state and action pair by
+        outputting a single letter. Your choices are A, B, C, D, E. A represents a terrible choice,
+        while E represents an excellent choice.
+        State: {node.state}
+        Action: {action}"""
+
+        # calculate logits for the next token
+        with torch.no_grad():
+            outputs = self.model.generate(**inputs)
+            next_token_logits = outputs.logits[:, -1, :]
+        
+        # map letters to token ids
+        choices = ['A', 'B', 'C', 'D', 'E']
+        choice_ids = [self.processor.tokenizer.convert_tokens_to_ids(c) for c in choices]
+
+        # extract probabilities of each choice
+        choice_logits = next_token_logits[0, choice_ids]
+        probs = F.softmax(choice_logits, dim=-1)
+
+        # calculate weighted sum of choices to determine score
+        weights = torch.tensor([0.0, 0.25, 0.5, 0.75, 1.0]).to(self.model.device)
+        score = torch.sum(probs * weights).item()
+
+        return score
+
+    def _parse_output(self, raw_text, latency):
+        """Extracts the specific tags for evaluation."""
+        cot_match = re.search(r'<cot>(.*?)</cot>', raw_text, re.DOTALL)
+        action_match = re.search(r'<action>(.*?)</action>', raw_text, re.DOTALL)
+        traj_match = re.search(r'<trajectory>(.*?)</trajectory>', raw_text, re.DOTALL)
+        
+        return {
+            "model_type": "Qwen2.5VL_Autoregressive_Baseline",
+            "latency_seconds": latency,
+            "raw_text": raw_text,
+            "chain_of_thought": cot_match.group(1).strip() if cot_match else None,
+            "meta_action": action_match.group(1).strip() if action_match else None,
+            "trajectory": self._parse_coordinates(traj_match.group(1)) if traj_match else []
+        }
+        
+    def _parse_coordinates(self, traj_string):
+        """Safely converts string '[[x,y], ...]' into a Python list of floats."""
+        try:
+            return ast.literal_eval(traj_string.strip())
+        except (ValueError, SyntaxError):
+            return []

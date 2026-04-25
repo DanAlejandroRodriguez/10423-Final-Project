@@ -14,4 +14,10 @@ class MCTSNode:
         """
         Calculate the upper confidence bound for trees
         """
-        return (self.value / 
+        return (self.value / self.visits) + explor_const * math.sqrt(math.log(total_visits) / self.visits)
+
+    def calculate_reward(self, verifier_score, latency, latency_hyperparam=0.1):
+        """
+        Calculate the search reward using the learned verifier model (which is Qwen-VL itself)
+        """
+        return verifier_score - latency_hyperparam * latency
