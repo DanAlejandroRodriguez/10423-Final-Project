@@ -10,7 +10,7 @@ Handled automatically. `DriveLMDataset` downloads the JSON from `OpenDriveLab/Dr
 1. Go to [nuscenes.org/download](https://www.nuscenes.org/download), create a free account, and accept the terms.
 2. Download **v1.0-trainval** — you need:
    - `v1.0-trainval_meta.tgz` (metadata)
-   - Any blob files you need for images (`v1.0-trainval01_blobs.tgz` through `v1.0-trainval10_blobs.tgz`)
+   - Any blob files you need for images (`v1.0-trainval_blob01.tgz` through `v1.0-trainval_blob10.tgz`)
 3. Place everything under `data/raw/nuscenes/` and extract. The metadata tarball will unpack as `v1.0-trainval/`. The blobs unpack into `samples/`.
 
 Expected structure:
@@ -36,7 +36,7 @@ data/raw/nuscenes/
 ```python
 from data.drivelm_dataset import DriveLMDataset
 
-dataset = DriveLMDataset(split="train", nuscenes_img_dir="data/raw/nuscenes/samples")
+dataset = DriveLMDataset(split="train", nuscenes_img_dir="data/raw/nuscenes")
 ```
 
 The metadata tarball is auto-extracted by `DriveLMDataset` if the `v1.0-trainval/` folder is missing but the `.tgz` is present.

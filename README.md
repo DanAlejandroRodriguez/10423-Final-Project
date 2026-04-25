@@ -111,7 +111,10 @@ brew install geos
 pip install -r requirements.txt
 pip install --no-deps nuscenes-devkit
 
-# 5. Download DriveLM data — see data/README.md for instructions
+# 5. Add your HuggingFace token to a .env file (required for gated DriveLM dataset)
+echo "HF_TOKEN=your_token_here" > .env
+
+# 6. Download DriveLM data — see data/README.md for instructions
 ```
 
 ---
