@@ -24,6 +24,11 @@ from torch.utils.data import Dataset
 from PIL import Image
 from huggingface_hub import hf_hub_download
 from nuscenes.nuscenes import NuScenes
+from dotenv import load_dotenv
+
+load_dotenv()
+
+_DRIVELM_IMG_PREFIX = "../nuscenes/"
 
 class DriveLMDataset(Dataset):
     CAMERA_VIEWS = [
@@ -31,14 +36,14 @@ class DriveLMDataset(Dataset):
         'CAM_BACK', 'CAM_BACK_LEFT', 'CAM_BACK_RIGHT'
     ]
 
-    def __init__(self, dataset_name="OpenDriveLab/DriveLM", split="train", nuscenes_img_dir="data/raw/nuscenes/samples"):
+    def __init__(self, dataset_name="OpenDriveLab/DriveLM", split="train", nuscenes_img_dir="data/raw/nuscenes"):
         """
         Initialization for loading DriveLM data.
         """
         self.img_dir = nuscenes_img_dir
-        self.nusc_version = "v1.0-mini" if "mini" in nuscenes_img_dir else "v1.0-trainval"
-        
-        dataroot = os.path.dirname(nuscenes_img_dir)
+        self.nusc_version = "v1.0-trainval"
+        self.nuscenes_root = nuscenes_img_dir  
+        dataroot = nuscenes_img_dir
         version_dir = os.path.join(dataroot, self.nusc_version)
         
         if not os.path.exists(os.path.join(version_dir, 'category.json')):
@@ -46,7 +51,6 @@ class DriveLMDataset(Dataset):
             if os.path.exists(meta_tar):
                 print(f"Extracting metadata from {meta_tar} to {dataroot}...")
                 with tarfile.open(meta_tar, "r:gz") as tar:
-                    # NuScenes tar usually creates the v1.0-trainval folder inside
                     tar.extractall(path=dataroot)
                 print("Metadata extraction complete!")
             else:
@@ -60,7 +64,8 @@ class DriveLMDataset(Dataset):
 
         filename = f"v1_1_{split}_nus.json" if split == "train" else f"v1_1_val_nus_q_only.json"
         print(f"Downloading/Loading {filename} from Hugging Face...")
-        json_path = hf_hub_download(repo_id=dataset_name, filename=filename, repo_type="dataset")
+        json_path = hf_hub_download(repo_id=dataset_name, filename=filename,
+                                    repo_type="dataset", token=os.environ.get("HF_TOKEN"))
 
         with open(json_path, 'r') as f:
             raw_data = json.load(f)
@@ -73,9 +78,10 @@ class DriveLMDataset(Dataset):
                 qas = []
                 qa_dict = frame_info.get("QA", {})
                 if isinstance(qa_dict, dict):
-                    for _, qa_list in qa_dict.items():
+                    for task, qa_list in qa_dict.items():
                         for qa_item in qa_list:
                             qas.append({
+                                "task": task,
                                 "question": qa_item.get("Q", ""),
                                 "answer": qa_item.get("A", "")
                             })
@@ -84,6 +90,7 @@ class DriveLMDataset(Dataset):
                     "token": sample_token,
                     "scene_id": scene_id,
                     "qas": qas,
+                    "image_paths": self._resolve_image_paths(frame_info),
                     "trajectory": self._extract_trajectory(sample_token),
                     "graph": frame_info
                 }
@@ -93,6 +100,15 @@ class DriveLMDataset(Dataset):
         
         self.scene_list = [s for s in self.scene_list if len(s.get("trajectory", [])) > 0]
         print(f"  → Filtered down to {len(self.scene_list)} frames that have native NuScenes trajectories.")
+
+    def _resolve_image_paths(self, frame_info):
+        """Convert DriveLM v1.1 relative image_paths to absolute paths."""
+        resolved = {}
+        for cam, rel_path in frame_info.get("image_paths", {}).items():
+            if rel_path.startswith(_DRIVELM_IMG_PREFIX):
+                rel_path = rel_path[len(_DRIVELM_IMG_PREFIX):]
+            resolved[cam] = os.path.join(self.nuscenes_root, rel_path)
+        return resolved
 
     def _extract_trajectory(self, sample_token, future_steps=6):
         """Extract future trajectories using nuScenes devkit."""
@@ -119,7 +135,7 @@ class DriveLMDataset(Dataset):
                 glob_pos = np.array(next_pose['translation'])
                 
                 local_pos = glob_pos - ref_translation
-                local_pos = np.dot(np.linalg.inv(ref_rotation), local_pos)
+                local_pos = ref_rotation.T @ local_pos
                 
                 trajectory.append([float(local_pos[0]), float(local_pos[1])])
                 
@@ -127,23 +143,15 @@ class DriveLMDataset(Dataset):
         except Exception:
             return []
 
-    def _load_images_for_token(self, sample_token):
-        """Helper to load all 6 camera images for a given scene token."""
+    def _load_images(self, image_paths):
+        """Helper to load all 6 camera images using pre-resolved paths from the JSON."""
         images = []
         for cam in self.CAMERA_VIEWS:
-            cam_dir = os.path.join(self.img_dir, cam)
-            matched_file = None
-            if os.path.exists(cam_dir):
-                for fname in os.listdir(cam_dir):
-                    if sample_token in fname and fname.endswith(('.jpg', '.png')):
-                        matched_file = os.path.join(cam_dir, fname)
-                        break
-            
-            if matched_file:
-                img = Image.open(matched_file).convert("RGB")
+            path = image_paths.get(cam, "")
+            if path and os.path.exists(path):
+                img = Image.open(path).convert("RGB")
             else:
                 img = Image.new("RGB", (1600, 900))
-            
             images.append(img)
         return images
 
@@ -153,10 +161,10 @@ class DriveLMDataset(Dataset):
     def __getitem__(self, idx):
         scene_data = self.scene_list[idx]
 
-        images = self._load_images_for_token(scene_data["token"])
+        images = self._load_images(scene_data["image_paths"])
 
         question = "\n".join([
-            f"Q: {qa['question']}" 
+            f"[{qa['task']}] Q: {qa['question']}" 
             for qa in scene_data["qas"]
             if qa['question'].strip()
         ])

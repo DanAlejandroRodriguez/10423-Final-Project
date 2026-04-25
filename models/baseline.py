@@ -3,30 +3,43 @@ import re
 import ast
 import torch
 from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
+from qwen_vl_utils import process_vision_info
+
+from data.preprocess import PromptFormatter
 
 class QwenBaselineVLA:
-    def __init__(self, model_id="Qwen/Qwen2.5-VL-7B-Instruct"):
+    def __init__(self, model_id="Qwen/Qwen2.5-VL-7B-Instruct", attn_implementation="sdpa",
+                 max_pixels=360*420):
         print(f"Loading {model_id} as Baseline...")
-        self.processor = AutoProcessor.from_pretrained(model_id)
+        self.processor = AutoProcessor.from_pretrained(model_id, max_pixels=max_pixels)
         self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
             model_id,
             torch_dtype=torch.bfloat16,
-            device_map="auto"
+            device_map="auto",
+            attn_implementation=attn_implementation
         )
         self.model.eval()
 
-    def generate_trajectory(self, images, text_prompt, max_new_tokens=512):
+    def generate_trajectory(self, images, question, max_new_tokens=512):
         """
         The standard interface for all the models.
         Returns a dictionary containing the parsed components and latency.
         """
-        formatted_prompt = self.processor.apply_chat_template(
-            text_prompt, 
-            tokenize=False, 
-            add_generation_prompt=True
+        messages = PromptFormatter.format(question=question, images=images)
+
+        text = self.processor.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
         )
 
-        inputs = self.processor(text=formatted_prompt, images=images if images else None, return_tensors="pt").to(self.model.device)
+        image_inputs, video_inputs = process_vision_info(messages)
+
+        inputs = self.processor(
+            text=[text],
+            images=image_inputs if image_inputs else None,
+            videos=video_inputs if video_inputs else None,
+            padding=True,
+            return_tensors="pt",
+        ).to(self.model.device)
         
         start_time = time.time()
         

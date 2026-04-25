@@ -26,9 +26,21 @@ class PromptFormatter:
         "<trajectory> [[x1,y1],[x2,y2],...] over a 6.4-second horizon </trajectory>"
     )
 
+    CAMERA_LABELS = [
+        "front camera", "front-left camera", "front-right camera",
+        "back camera", "back-left camera", "back-right camera",
+    ]
+
     @staticmethod
-    def format(question, num_images=6):
-        user_content = [{"type": "image"} for _ in range(num_images)]
+    def format(question, images=None):
+        user_content = []
+
+        if images:
+            for i, img in enumerate(images):
+                label = PromptFormatter.CAMERA_LABELS[i] if i < len(PromptFormatter.CAMERA_LABELS) else f"camera {i}"
+                user_content.append({"type": "text", "text": f"[{label}]"})
+                user_content.append({"type": "image", "image": img})
+
         user_content.append({"type": "text", "text": f"Question: {question}"})
 
         return [
