@@ -23,7 +23,9 @@ class PromptFormatter:
         "using exactly these tags:\n"
         "<cot> step-by-step reasoning </cot>\n"
         "<action> one of: STOP, YIELD, ACCELERATE, DECELERATE, TURN_LEFT, TURN_RIGHT, LANE_CHANGE </action>\n"
-        "<trajectory> [[x1,y1],[x2,y2],...] over a 6.4-second horizon </trajectory>"
+        "<trajectory> [[x1,y1],[x2,y2],...] over a 6.4-second horizon </trajectory>\n"
+        "You MUST answer using the exact XML tags <cot>, <action>, and <trajectory>\n"
+        "Generate your chain of thought first, then your action, and FINALLY a Python list of exactly 13 [x, y] float coordinates for your trajectory"
     )
 
     CAMERA_LABELS = [
