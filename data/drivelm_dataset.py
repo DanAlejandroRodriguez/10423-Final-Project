@@ -41,7 +41,9 @@ class DriveLMDataset(Dataset):
         Initialization for loading DriveLM data.
         """
         self.img_dir = nuscenes_img_dir
-        self.nusc_version = "v1.0-trainval"
+        # self.nusc_version = "v1.0-trainval"
+        
+        self.nusc_version = "v1.0-mini"
         self.nuscenes_root = nuscenes_img_dir  
         dataroot = nuscenes_img_dir
         version_dir = os.path.join(dataroot, self.nusc_version)
