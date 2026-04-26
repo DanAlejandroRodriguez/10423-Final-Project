@@ -4,8 +4,10 @@ import ast
 import torch
 from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
 from qwen_vl_utils import process_vision_info
+import torch.nn.functional as F
 
 from data.preprocess import PromptFormatter
+from search.mcts import MCTSNode
 
 class QwenBaselineVLA:
     def __init__(self, model_id="Qwen/Qwen2.5-VL-7B-Instruct", attn_implementation="sdpa",
@@ -61,6 +63,75 @@ class QwenBaselineVLA:
         raw_text = self.processor.decode(generated_tokens, skip_special_tokens=True)
         
         return self._parse_output(raw_text, latency)
+
+    def mcts_generate(self, inputs, max_new_tokens=512, iterations=50):
+        """
+        Runs MCTS on the input image and prompt.
+        Returns the action with the highest number of visits.
+        """
+        root = MCTSNode(state=inputs)
+
+        for _ in range(iterations):
+            node = root
+
+            while node.children:
+                node = max(node.children.values(), key=lambda n: n.ucb_score(root.visits))
+
+            start_time = time.time()
+
+            actions = self.model.generate(
+                **node.state,
+                do_sample=True,
+                temperature=0.7,
+                top_p=0.9,
+                num_return_sequences=5,
+                max_new_tokens=max_new_tokens
+            )
+
+            latency = time.time() - start_time
+
+            for action in actions:
+                action_key = tuple(action.tolist())
+                new_input_ids = torch.cat([node.state["input_ids"], action.unsqueeze(0)], dim=1)
+                new_state = dict(node.state)
+                new_state["input_ids"] = new_input_ids
+                node.children[action_key] = MCTSNode(state=new_state, parent=node)
+
+                verifier_score = self.self_evaluate_state(inputs, node, action)
+                reward = node.calculate_reward(verifier_score, latency)
+
+                node.children[action_key].value = reward
+                node.children[action_key].visits = 1
+
+            backprop_node = node
+            while backprop_node:
+                backprop_node.visits += 1
+                backprop_node.value += reward
+                backprop_node = backprop_node.parent
+
+        return max(root.children.items(), key=lambda item: item[1].visits)[0]
+
+    def self_evaluate_state(self, inputs, node, action):
+        eval_prompt = f""" Task: Given an action and the current state, score the state and action pair by
+        outputting a single letter. Your choices are A, B, C, D, E. A represents a terrible choice,
+        while E represents an excellent choice.
+        State: {node.state}
+        Action: {action}"""
+
+        eval_inputs = self.processor(text=eval_prompt, return_tensors="pt").to(self.model.device)
+        with torch.no_grad():
+            outputs = self.model(**eval_inputs)
+            next_token_logits = outputs.logits[:, -1, :]
+
+        choices = ['A', 'B', 'C', 'D', 'E']
+        choice_ids = [self.processor.tokenizer.convert_tokens_to_ids(c) for c in choices]
+        choice_logits = next_token_logits[0, choice_ids]
+        probs = F.softmax(choice_logits, dim=-1)
+
+        weights = torch.tensor([0.0, 0.25, 0.5, 0.75, 1.0]).to(self.model.device)
+        score = torch.sum(probs * weights).item()
+
+        return score
 
     def _parse_output(self, raw_text, latency):
         """Extracts the specific tags for evaluation."""
