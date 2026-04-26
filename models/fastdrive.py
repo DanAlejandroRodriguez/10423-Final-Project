@@ -1,6 +1,7 @@
 import torch
 import time
 import re
+import ast
 from .baseline import QwenBaselineVLA
 from .dag_scheduler import DagScheduler
 
@@ -53,6 +54,58 @@ class FastDriveVLA(QwenBaselineVLA):
         "non_interactive_summary": 50, "interactive_summary": 50,
         "ego_behavior_summary": 60,
     }
+
+    # Field name template appended to prefix so the model knows what to generate
+    # per Section 3.1: "field name: field content" one entry per line
+    COT_TEMPLATE = (
+        "Describe the driving scene using these fields:\n"
+        "lighting: \n"
+        "road_condition: \n"
+        "weather: \n"
+        "junction_type: \n"
+        "road_type: \n"
+        "traffic_light: \n"
+        "traffic_sign: \n"
+        "lanes_enumeration: \n"
+        "lane_detail_0: \n"
+        "lane_detail_1: \n"
+        "lane_detail_2: \n"
+        "critical_objects_enumeration: \n"
+        "critical_object_0: \n"
+        "critical_object_1: \n"
+        "critical_object_2: \n"
+        "critical_object_3: \n"
+        "traffic_regulation_summary: \n"
+        "non_interactive_summary: \n"
+        "interactive_summary: \n"
+        "ego_behavior_summary: \n"
+    )
+
+    # Multi-shot example so the model follows the format without fine-tuning
+    COT_EXAMPLE = (
+        "Example output:\n"
+        "lighting: bright daylight\n"
+        "road_condition: dry asphalt\n"
+        "weather: clear\n"
+        "junction_type: T-intersection\n"
+        "road_type: urban road\n"
+        "traffic_light: green\n"
+        "traffic_sign: speed limit 30\n"
+        "lanes_enumeration: two lanes ahead\n"
+        "lane_detail_0: ego lane clear\n"
+        "lane_detail_1: adjacent lane has slow vehicle\n"
+        "lane_detail_2: N/A\n"
+        "critical_objects_enumeration: one pedestrian, one car\n"
+        "critical_object_0: pedestrian on sidewalk, not crossing\n"
+        "critical_object_1: car ahead, moving slowly\n"
+        "critical_object_2: N/A\n"
+        "critical_object_3: N/A\n"
+        "traffic_regulation_summary: green light, 30 km/h limit\n"
+        "non_interactive_summary: road is clear, no obstacles in path\n"
+        "interactive_summary: slow car ahead requires attention\n"
+        "ego_behavior_summary: maintain speed, prepare to decelerate\n"
+        "Now describe the current scene:\n"
+    )
 
     def __init__(self, model_id="Qwen/Qwen2.5-VL-7B-Instruct"):
         super().__init__(model_id=model_id, attn_implementation="sdpa")
@@ -159,64 +212,73 @@ class FastDriveVLA(QwenBaselineVLA):
     
     def build_ancestor_mask(self):
         """
-        Builds both the ancestor mask and the related edges
-        Returns the vertices, edges, and ancestor mask
+        Builds the ancestor mask via transitive closure (DFS).
+        ancestor_mask[i][j] = True means field j is an ancestor of field i.
         """
         node_to_idx = {name: i for i, name in enumerate(self.DRIVELM_COT_VERTICES)}
+        n = len(self.DRIVELM_COT_VERTICES)
+        ancestor_mask = torch.zeros(n, n, dtype=torch.bool)
 
-        num_source_nodes = len(self.DRIVELM_COT_VERTICES)
-        ancestor_mask = torch.zeros(num_source_nodes, num_source_nodes, dtype=torch.bool)
+        def is_ancestor(a, b):
+            visited = set()
+            stack = [a]
+            while stack:
+                node = stack.pop()
+                if node == b:
+                    return True
+                if node in visited:
+                    continue
+                visited.add(node)
+                for src, dst in self.DRIVELM_COT_EDGES:
+                    if src == node:
+                        stack.append(dst)
+            return False
 
-        for (a, b) in self.DRIVELM_COT_EDGES:
-            ancestor_mask[node_to_idx[b], node_to_idx[a]] = True
-        ancestor_mask[[node_to_idx["non_interactive_summary"], node_to_idx["ego_behavior_summary"]], node_to_idx["lanes_enumeration"]] = True
-        ancestor_mask[node_to_idx["ego_behavior_summary"], [node_to_idx["lane_detail_0"], node_to_idx["lane_detail_1"], node_to_idx["lane_detail_2"]]] = True
-        ancestor_mask[[node_to_idx["interactive_summary"], node_to_idx["ego_behavior_summary"]], node_to_idx["critical_objects_enumeration"]] = True
-        ancestor_mask[node_to_idx["ego_behavior_summary"], [node_to_idx["critical_object_0"], node_to_idx["critical_object_1"], node_to_idx["critical_object_2"], node_to_idx["critical_object_3"]]] = True
-        ancestor_mask[[node_to_idx["non_interactive_summary"], node_to_idx["interactive_summary"], node_to_idx["ego_behavior_summary"]], [node_to_idx["traffic_light"], node_to_idx["traffic_sign"]]] = True
-        
+        for i, fi in enumerate(self.DRIVELM_COT_VERTICES):
+            for j, fj in enumerate(self.DRIVELM_COT_VERTICES):
+                if i != j and is_ancestor(fj, fi):
+                    ancestor_mask[i, j] = True
+
         return ancestor_mask
     
-    def generate_trajectory(self, images, text_prompt, max_new_tokens=512):
+    def generate_trajectory_parallel(self, images, text_prompt, max_new_tokens=512):
+        from data.preprocess import PromptFormatter
+
+        # Build prompt with field template and multi-shot example appended
+        question = text_prompt[1]["content"][-1]["text"].replace("Question: ", "")
+        full_question = question + "\n\n" + self.COT_EXAMPLE + self.COT_TEMPLATE
+
+        messages = PromptFormatter.format(full_question, num_images=len(images) if images else 0)
         formatted_prompt = self.processor.apply_chat_template(
-            text_prompt,
+            messages,
             tokenize=False,
-            add_generation_prompt=False
+            add_generation_prompt=True
         )
 
-        inputs = self.processor(text=formatted_prompt, images=images if images else None, return_tensors="pt").to(self.model.device)
+        inputs = self.processor(
+            text=formatted_prompt,
+            images=images if images else None,
+            return_tensors="pt"
+        ).to(self.model.device)
 
         ancestor_mask = self.build_ancestor_mask()
 
         start_time = time.time()
 
-        dag_scheduler = DagScheduler(formatted_prompt, inputs, self, self.DRIVELM_COT_VERTICES, self.DRIVELM_COT_EDGES, self.DRIVELM_COT_MAX_LENGTHS, ancestor_mask)
+        dag_scheduler = DagScheduler(
+            formatted_prompt, inputs, self,
+            self.DRIVELM_COT_VERTICES, self.DRIVELM_COT_EDGES,
+            self.DRIVELM_COT_MAX_LENGTHS, ancestor_mask
+        )
         generated_tokens = dag_scheduler.run_parallel_decoding()
+
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
 
         latency = time.time() - start_time
 
         raw_text = self.processor.decode(generated_tokens, skip_special_tokens=True)
 
-        return self._parse_output(raw_text, latency)
-
-    def _parse_output(self, raw_text, latency):
-        """Extracts the specific tags for evaluation."""
-        cot_match = re.search(r'<cot>(.*?)</cot>', raw_text, re.DOTALL)
-        action_match = re.search(r'<action>(.*?)</action>', raw_text, re.DOTALL)
-        traj_match = re.search(r'<trajectory>(.*?)</trajectory>', raw_text, re.DOTALL)
-        
-        return {
-            "model_type": "Qwen2.5VL_Autoregressive_Baseline",
-            "latency_seconds": latency,
-            "raw_text": raw_text,
-            "chain_of_thought": cot_match.group(1).strip() if cot_match else None,
-            "meta_action": action_match.group(1).strip() if action_match else None,
-            "trajectory": self._parse_coordinates(traj_match.group(1)) if traj_match else []
-        }
-        
-    def _parse_coordinates(self, traj_string):
-        """Safely converts string '[[x,y], ...]' into a Python list of floats."""
-        try:
-            return ast.literal_eval(traj_string.strip())
-        except (ValueError, SyntaxError):
-            return []
+        result = self._parse_output(raw_text, latency)
+        result["model_type"] = "Qwen2.5VL_FastDriveCoT_Parallel"
+        return result

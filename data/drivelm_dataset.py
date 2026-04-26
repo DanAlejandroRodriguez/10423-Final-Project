@@ -130,19 +130,18 @@ class DriveLMDataset(Dataset):
         """Helper to load all 6 camera images for a given scene token."""
         images = []
         for cam in self.CAMERA_VIEWS:
-            cam_dir = os.path.join(self.img_dir, cam)
-            matched_file = None
-            if os.path.exists(cam_dir):
-                for fname in os.listdir(cam_dir):
-                    if sample_token in fname and fname.endswith(('.jpg', '.png')):
-                        matched_file = os.path.join(cam_dir, fname)
-                        break
-            
-            if matched_file:
-                img = Image.open(matched_file).convert("RGB")
-            else:
+            img = None
+            if self.nusc is not None:
+                try:
+                    sample = self.nusc.get('sample', sample_token)
+                    sd = self.nusc.get('sample_data', sample['data'][cam])
+                    img_path = os.path.join(os.path.dirname(self.img_dir), sd['filename'])
+                    if os.path.exists(img_path):
+                        img = Image.open(img_path).convert("RGB")
+                except Exception:
+                    pass
+            if img is None:
                 img = Image.new("RGB", (1600, 900))
-            
             images.append(img)
         return images
 
