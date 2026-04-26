@@ -24,10 +24,10 @@ class DagScheduler():
         prefix_length = self.inputs["input_ids"].shape[1]
         branch_lengths = [self.max_lengths[v] for v in self.vertices]
         field_tokens = {v: [] for v in self.vertices}
-        field_done = {v: False for v in self.vertices}
+
+        past_key_values = self.model.prefill_prefix(self.inputs["input_ids"])
 
         while len(self.S) != 0:
-            # Build full template sequence: prefix + all field slots
             device = self.inputs["input_ids"].device
             slot_tensors = []
             for v in self.vertices:
@@ -41,27 +41,25 @@ class DagScheduler():
 
             padding_lengths = [self.max_lengths[v] - len(field_tokens[v]) for v in self.vertices]
 
-            # One forward pass — get logits for all field positions
             logits = self.model.parallel_forward_pass(
                 input_ids,
                 branch_lengths,
                 ancestor_mask=self.ancestor_mask,
                 padding_lengths=padding_lengths,
+                past_key_values=past_key_values,
             )
 
-            # Greedy decode one new token for each active field in S
+            logit_offset = 0 if past_key_values is not None else prefix_length
             for v in self.S:
                 v_idx = self.vertices.index(v)
-                field_offset = prefix_length + sum(branch_lengths[:v_idx])
+                field_offset = logit_offset + sum(branch_lengths[:v_idx])
                 token_pos = field_offset + len(field_tokens[v])
                 next_token = logits[0, token_pos].argmax(-1).item()
                 field_tokens[v].append(next_token)
 
-            # Check which fields finished this step
             finished = []
             for v in list(self.S):
                 if len(field_tokens[v]) >= self.max_lengths[v]:
-                    field_done[v] = True
                     finished.append(v)
 
             for v in finished:
@@ -72,7 +70,6 @@ class DagScheduler():
                         if self.num_incoming_edges[b] == 0:
                             self.S.append(b)
 
-        # Concatenate all field tokens in order
         all_tokens = []
         for v in self.vertices:
             all_tokens.extend(field_tokens[v])

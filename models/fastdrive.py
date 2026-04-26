@@ -1,9 +1,9 @@
 import torch
 import time
 import re
-import ast
 from .baseline import QwenBaselineVLA
 from .dag_scheduler import DagScheduler
+from data.preprocess import PromptFormatter
 
 
 class FastDriveVLA(QwenBaselineVLA):
@@ -55,8 +55,7 @@ class FastDriveVLA(QwenBaselineVLA):
         "ego_behavior_summary": 60,
     }
 
-    # Field name template appended to prefix so the model knows what to generate
-    # per Section 3.1: "field name: field content" one entry per line
+    # Field name template per Section 3.1: "field name: field content" one entry per line
     COT_TEMPLATE = (
         "Describe the driving scene using these fields:\n"
         "lighting: \n"
@@ -81,7 +80,7 @@ class FastDriveVLA(QwenBaselineVLA):
         "ego_behavior_summary: \n"
     )
 
-    # Multi-shot example so the model follows the format without fine-tuning
+    # Multi-shot example for zero-shot format compliance
     COT_EXAMPLE = (
         "Example output:\n"
         "lighting: bright daylight\n"
@@ -175,20 +174,62 @@ class FastDriveVLA(QwenBaselineVLA):
         ])
         return torch.cat([prefix_pos, branch_pos]).unsqueeze(0)
 
-    def parallel_forward_pass(self, input_ids, branch_lengths, ancestor_mask=None, padding_lengths=None, position_ids=None):
+    def prefill_prefix(self, prefix_input_ids):
+        """
+        Run one forward pass over the prefix to populate the KV cache.
+        Returns past_key_values to be reused across all decoding steps.
+        """
+        with torch.no_grad():
+            outputs = self.model(
+                input_ids=prefix_input_ids.to(self.model.device),
+                use_cache=True,
+            )
+        return outputs.past_key_values
+
+    def parallel_forward_pass(self, input_ids, branch_lengths, ancestor_mask=None, padding_lengths=None, position_ids=None, past_key_values=None):
         """
         Executes a single forward pass with the DAG attention mask.
 
         The DAG scheduler constructs input_ids by concatenating
         [prefix_tokens, branch_1_tokens, ..., branch_n_tokens].
-        Returns logits of shape (1, total_seq_len, vocab_size).
+        When past_key_values is provided, only field slot tokens are processed.
+        Returns logits of shape (1, slots_len, vocab_size) with KV cache,
+        or (1, total_seq_len, vocab_size) without.
         """
+        device = self.model.device
+        input_ids = input_ids.to(device)
+
+        if past_key_values is not None:
+            prefix_length = past_key_values[0][0].shape[2]
+            slots_input_ids = input_ids[:, prefix_length:]
+
+            bool_mask = self.build_dag_attention_mask(
+                prefix_length, branch_lengths, ancestor_mask, padding_lengths
+            ).to(device)
+
+            dtype = self.model.dtype
+            additive_mask = torch.zeros_like(bool_mask, dtype=dtype)
+            additive_mask = additive_mask.masked_fill(~bool_mask, torch.finfo(dtype).min)
+            additive_mask = additive_mask.unsqueeze(0).unsqueeze(0)
+
+            if position_ids is None:
+                position_ids = self.build_dag_position_ids(prefix_length, branch_lengths)
+            slot_position_ids = position_ids[:, prefix_length:].to(device)
+
+            with torch.no_grad():
+                outputs = self.model(
+                    input_ids=slots_input_ids,
+                    attention_mask=additive_mask,
+                    position_ids=slot_position_ids,
+                    past_key_values=past_key_values,
+                    use_cache=False,
+                )
+            return outputs.logits
         prefix_length = input_ids.shape[1] - sum(branch_lengths)
 
         bool_mask = self.build_dag_attention_mask(
             prefix_length, branch_lengths, ancestor_mask, padding_lengths
-        )
-        bool_mask = bool_mask.to(device=self.model.device)
+        ).to(device)
 
         dtype = self.model.dtype
         additive_mask = torch.zeros_like(bool_mask, dtype=dtype)
@@ -197,8 +238,7 @@ class FastDriveVLA(QwenBaselineVLA):
 
         if position_ids is None:
             position_ids = self.build_dag_position_ids(prefix_length, branch_lengths)
-        position_ids = position_ids.to(device=self.model.device)
-        input_ids = input_ids.to(device=self.model.device)
+        position_ids = position_ids.to(device)
 
         with torch.no_grad():
             outputs = self.model(
@@ -215,7 +255,6 @@ class FastDriveVLA(QwenBaselineVLA):
         Builds the ancestor mask via transitive closure (DFS).
         ancestor_mask[i][j] = True means field j is an ancestor of field i.
         """
-        node_to_idx = {name: i for i, name in enumerate(self.DRIVELM_COT_VERTICES)}
         n = len(self.DRIVELM_COT_VERTICES)
         ancestor_mask = torch.zeros(n, n, dtype=torch.bool)
 
@@ -242,9 +281,6 @@ class FastDriveVLA(QwenBaselineVLA):
         return ancestor_mask
     
     def generate_trajectory_parallel(self, images, text_prompt, max_new_tokens=512):
-        from data.preprocess import PromptFormatter
-
-        # Build prompt with field template and multi-shot example appended
         question = text_prompt[1]["content"][-1]["text"].replace("Question: ", "")
         full_question = question + "\n\n" + self.COT_EXAMPLE + self.COT_TEMPLATE
 
