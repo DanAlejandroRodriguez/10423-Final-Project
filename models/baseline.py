@@ -69,6 +69,11 @@ class QwenBaselineVLA:
         Returns the action with the highest number of visits.
         """
         root = MCTSNode(state=inputs)
+        prefix_length = inputs["input_ids"].shape[1]
+
+        with torch.no_grad():
+            prefix_out = self.model(**inputs, use_cache=True)
+        prefix_kv = prefix_out.past_key_values
 
         for _ in range(iterations):
             node = root
@@ -78,13 +83,25 @@ class QwenBaselineVLA:
 
             start_time = time.time()
 
+            node_new_ids = node.state["input_ids"][:, prefix_length:].to(self.model.device)
+            if node_new_ids.shape[1] > 0:
+                with torch.no_grad():
+                    node_kv = self.model(
+                        input_ids=node_new_ids,
+                        past_key_values=prefix_kv,
+                        use_cache=True,
+                    ).past_key_values
+            else:
+                node_kv = prefix_kv
+
             actions = self.model.generate(
-                **node.state,
+                input_ids=torch.zeros(1, 1, dtype=torch.long, device=self.model.device),
+                past_key_values=node_kv,
                 do_sample=True,
                 temperature=0.7,
                 top_p=0.9,
                 num_return_sequences=5,
-                max_new_tokens=max_new_tokens
+                max_new_tokens=max_new_tokens,
             )
 
             latency = time.time() - start_time
