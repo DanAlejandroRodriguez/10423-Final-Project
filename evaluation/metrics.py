@@ -130,6 +130,11 @@ def trajectory_ade(
 
     if pred_arr.ndim != 2 or gt_arr.ndim != 2:
         return float("inf")
+    
+    # Protect against the model hallucinating bounding boxes or 3D 
+    # coordinates instead of [x, y] pairs.
+    if pred_arr.shape[1] != 2 or gt_arr.shape[1] != 2:
+        return float("inf")
 
     n = min(len(pred_arr), len(gt_arr))
     if max_steps is not None:
@@ -330,61 +335,61 @@ def main():
         evaluator.records = records
         summary = evaluator.summarise()
         _print_summary(summary)
-    else:
-        # sanity check with synthetic data
-        print("Running sanity check with synthetic data…")
+    # else:
+    #     # sanity check with synthetic data
+    #     print("Running sanity check with synthetic data…")
 
-        pred_traj = [[1.0, 0.5], [2.1, 1.0], [3.0, 1.5],
-                     [4.2, 2.0], [5.0, 2.5], [6.1, 3.0]]
-        gt_traj =   [[1.0, 0.5], [2.0, 1.0], [3.0, 1.5],
-                     [4.0, 2.0], [5.0, 2.5], [6.0, 3.0]]
+    #     pred_traj = [[1.0, 0.5], [2.1, 1.0], [3.0, 1.5],
+    #                  [4.2, 2.0], [5.0, 2.5], [6.1, 3.0]]
+    #     gt_traj =   [[1.0, 0.5], [2.0, 1.0], [3.0, 1.5],
+    #                  [4.0, 2.0], [5.0, 2.5], [6.0, 3.0]]
 
-        evaluator = DriveLMEvaluator()
+    #     evaluator = DriveLMEvaluator()
 
-        # Simulate model output
-        model_output = {
-            "meta_action": "ACCELERATE",
-            "trajectory": pred_traj,
-            "latency_seconds": 1.23,
-        }
-        gt_graph = {
-            "QA": {
-                "behavior": [
-                    {"Q": "What should the ego car do?",
-                     "A": "ACCELERATE, TURN_LEFT"}
-                ]
-            }
-        }
+    #     # Simulate model output
+    #     model_output = {
+    #         "meta_action": "ACCELERATE",
+    #         "trajectory": pred_traj,
+    #         "latency_seconds": 1.23,
+    #     }
+    #     gt_graph = {
+    #         "QA": {
+    #             "behavior": [
+    #                 {"Q": "What should the ego car do?",
+    #                  "A": "ACCELERATE, TURN_LEFT"}
+    #             ]
+    #         }
+    #     }
 
-        evaluator.add(model_output, gt_traj, gt_graph)
+    #     evaluator.add(model_output, gt_traj, gt_graph)
 
-        # Second sample — exact match
-        model_output_2 = {
-            "meta_action": "STOP",
-            "trajectory": gt_traj,
-            "latency_seconds": 0.87,
-        }
-        gt_graph_2 = {
-            "QA": {
-                "behavior": [
-                    {"Q": "What should the ego car do?",
-                     "A": "STOP"}
-                ]
-            }
-        }
-        evaluator.add(model_output_2, gt_traj, gt_graph_2)
+    #     # Second sample — exact match
+    #     model_output_2 = {
+    #         "meta_action": "STOP",
+    #         "trajectory": gt_traj,
+    #         "latency_seconds": 0.87,
+    #     }
+    #     gt_graph_2 = {
+    #         "QA": {
+    #             "behavior": [
+    #                 {"Q": "What should the ego car do?",
+    #                  "A": "STOP"}
+    #             ]
+    #         }
+    #     }
+    #     evaluator.add(model_output_2, gt_traj, gt_graph_2)
 
-        summary = evaluator.summarise()
-        _print_summary(summary)
+    #     summary = evaluator.summarise()
+    #     _print_summary(summary)
 
-        # Verify individual metric functions
-        print("Individual metric checks:")
-        print(f"  meta_action_iou('ACCELERATE', 'ACCELERATE, TURN_LEFT') "
-              f"= {meta_action_iou('ACCELERATE', 'ACCELERATE, TURN_LEFT'):.4f}")
-        print(f"  meta_action_iou('STOP', 'STOP') "
-              f"= {meta_action_iou('STOP', 'STOP'):.4f}")
-        print(f"  ade_3s(pred, gt) = {ade_3s(pred_traj, gt_traj):.4f} m")
-        print(f"  ade_6_4s(pred, gt) = {ade_6_4s(pred_traj, gt_traj):.4f} m")
+    #     # Verify individual metric functions
+    #     print("Individual metric checks:")
+    #     print(f"  meta_action_iou('ACCELERATE', 'ACCELERATE, TURN_LEFT') "
+    #           f"= {meta_action_iou('ACCELERATE', 'ACCELERATE, TURN_LEFT'):.4f}")
+    #     print(f"  meta_action_iou('STOP', 'STOP') "
+    #           f"= {meta_action_iou('STOP', 'STOP'):.4f}")
+    #     print(f"  ade_3s(pred, gt) = {ade_3s(pred_traj, gt_traj):.4f} m")
+    #     print(f"  ade_6_4s(pred, gt) = {ade_6_4s(pred_traj, gt_traj):.4f} m")
 
 
 if __name__ == "__main__":
