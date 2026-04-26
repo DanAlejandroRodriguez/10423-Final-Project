@@ -1,12 +1,63 @@
 import torch
+import time
+import re
 from .baseline import QwenBaselineVLA
+from .dag_scheduler import DagScheduler
 
 
 class FastDriveVLA(QwenBaselineVLA):
+
+    DRIVELM_COT_VERTICES = [
+        "lighting", "road_condition", "weather", "junction_type", "road_type",
+        "traffic_light", "traffic_sign",
+        "lanes_enumeration", "lane_detail_0", "lane_detail_1", "lane_detail_2",
+        "critical_objects_enumeration",
+        "critical_object_0", "critical_object_1", "critical_object_2", "critical_object_3",
+        "traffic_regulation_summary", "non_interactive_summary",
+        "interactive_summary", "ego_behavior_summary",
+    ]
+
+    DRIVELM_COT_EDGES = [
+        ("lanes_enumeration", "lane_detail_0"),
+        ("lanes_enumeration", "lane_detail_1"),
+        ("lanes_enumeration", "lane_detail_2"),
+        ("critical_objects_enumeration", "critical_object_0"),
+        ("critical_objects_enumeration", "critical_object_1"),
+        ("critical_objects_enumeration", "critical_object_2"),
+        ("critical_objects_enumeration", "critical_object_3"),
+        ("traffic_light", "traffic_regulation_summary"),
+        ("traffic_sign", "traffic_regulation_summary"),
+        ("traffic_regulation_summary", "non_interactive_summary"),
+        ("traffic_regulation_summary", "interactive_summary"),
+        ("lane_detail_0", "non_interactive_summary"),
+        ("lane_detail_1", "non_interactive_summary"),
+        ("lane_detail_2", "non_interactive_summary"),
+        ("critical_object_0", "interactive_summary"),
+        ("critical_object_1", "interactive_summary"),
+        ("critical_object_2", "interactive_summary"),
+        ("critical_object_3", "interactive_summary"),
+        ("non_interactive_summary", "ego_behavior_summary"),
+        ("interactive_summary", "ego_behavior_summary"),
+    ]
+
+    DRIVELM_COT_MAX_LENGTHS = {
+        "lighting": 8, "road_condition": 10, "weather": 8,
+        "junction_type": 10, "road_type": 10,
+        "traffic_light": 15, "traffic_sign": 20,
+        "lanes_enumeration": 20,
+        "lane_detail_0": 40, "lane_detail_1": 40, "lane_detail_2": 40,
+        "critical_objects_enumeration": 30,
+        "critical_object_0": 50, "critical_object_1": 50,
+        "critical_object_2": 50, "critical_object_3": 50,
+        "traffic_regulation_summary": 40,
+        "non_interactive_summary": 50, "interactive_summary": 50,
+        "ego_behavior_summary": 60,
+    }
+
     def __init__(self, model_id="Qwen/Qwen2.5-VL-7B-Instruct"):
         super().__init__(model_id=model_id, attn_implementation="sdpa")
 
-    def build_dag_attention_mask(self, prefix_length, ancestor_lengths, branch_lengths, ancestor_mask=None, padding_lengths=None):
+    def build_dag_attention_mask(self, prefix_length, branch_lengths, ancestor_mask=None, padding_lengths=None):
         """
         Builds a 2D boolean causal attention mask for parallel CoT decoding.
 
@@ -15,35 +66,15 @@ class FastDriveVLA(QwenBaselineVLA):
         visible to all following tokens regardless of dependencies. Padding
         tokens are invisible to every other token in the sequence.
         """
-        total_len = prefix_length + sum(ancestor_lengths) + sum(branch_lengths)
+        total_len = prefix_length + sum(branch_lengths)
         mask = torch.zeros(total_len, total_len, dtype=torch.bool)
 
         mask[:prefix_length, :prefix_length] = torch.tril(
             torch.ones(prefix_length, prefix_length, dtype=torch.bool)
         )
 
-        offset = prefix_length
-        if ancestor_lengths is not None:
-            ancestor_offsets = []
-            ancestor_offset = prefix_length
-            for ancestor_len in ancestor_lengths:
-                ancestor_offset.append(ancestor_offset)
-                ancestor_offsets += ancestor_len
-        
-            ancestor_padding_lengths = ancestor_padding_lengths or [0] * len(ancestor_lengths)
-
-            for i, (ancestor_len, pad_len, start) in enumerate(zip(ancestor_lengths, ancestor_padding_lengths, ancestor_offsets)):
-                real_len = ancestor_len - pad_len
-                real_end = start + real_len
-
-                mask[start:real_end, :start-1] = True
-                mask[start:real_end, start:real_end] = torch.tril(
-                    torch.ones(real_len, real_len, dtype=torch.bool)
-                )
-        
-            offset = ancestor_lengths
-
         offsets = []
+        offset = prefix_length
         for branch_len in branch_lengths:
             offsets.append(offset)
             offset += branch_len
@@ -59,8 +90,8 @@ class FastDriveVLA(QwenBaselineVLA):
             if ancestor_mask is not None:
                 for j, is_ancestor in enumerate(ancestor_mask[i]):
                     if is_ancestor:
-                        anc_start = ancestor_offsets[j]
-                        anc_real_end = anc_start + ancestor_lengths[j] - ancestor_padding_lengths[j]
+                        anc_start = offsets[j]
+                        anc_real_end = anc_start + branch_lengths[j] - padding_lengths[j]
                         mask[start:real_end, anc_start:anc_real_end] = True
 
             mask[start:real_end, start:real_end] = torch.tril(
@@ -74,21 +105,6 @@ class FastDriveVLA(QwenBaselineVLA):
                     pad_end - pad_start, dtype=torch.bool
                 )
 
-        return mask
-    
-    def build_dag_ancestor_mask(self, prefix_length, num_ancestors, num_branches, padding_lengths=None):
-        """
-        Builds a 2D ancestor mask for DAG scheduler
-        """
-        total_len = num_ancestors + num_branches
-        mask = torch.zeros(total_len, total_len, dtype=torch.bool)
-        mask[0:num_ancestors, 0:num_ancestors] = torch.tril(
-            torch.ones(num_ancestors, num_ancestors, dtype=torch.bool), diagonal=-1
-        )
-        for i in range(num_branches):
-            offset = num_ancestors
-            for j in range(num_ancestors):
-                mask[offset + i, j] = True
         return mask
 
     def build_dag_position_ids(self, prefix_length, branch_lengths):
@@ -106,20 +122,18 @@ class FastDriveVLA(QwenBaselineVLA):
         ])
         return torch.cat([prefix_pos, branch_pos]).unsqueeze(0)
 
-    def parallel_forward_pass(self, input_ids, ancestor_lengths, branch_lengths, ancestor_mask=None, padding_lengths=None, position_ids=None):    
+    def parallel_forward_pass(self, input_ids, branch_lengths, ancestor_mask=None, padding_lengths=None, position_ids=None):
         """
         Executes a single forward pass with the DAG attention mask.
 
         The DAG scheduler constructs input_ids by concatenating
-        [prefix_tokens, ancestors, branch_1_tokens, ..., branch_n_tokens].
+        [prefix_tokens, branch_1_tokens, ..., branch_n_tokens].
         Returns logits of shape (1, total_seq_len, vocab_size).
         """
         prefix_length = input_ids.shape[1] - sum(branch_lengths)
-        if ancestor_mask is not None:
-             prefix_length -= sum(ancestor_lengths)
 
         bool_mask = self.build_dag_attention_mask(
-            prefix_length, ancestor_lengths, branch_lengths, ancestor_mask, padding_lengths
+            prefix_length, branch_lengths, ancestor_mask, padding_lengths
         )
         bool_mask = bool_mask.to(device=self.model.device)
 
@@ -142,7 +156,67 @@ class FastDriveVLA(QwenBaselineVLA):
             )
 
         return outputs.logits
+    
+    def build_ancestor_mask(self):
+        """
+        Builds both the ancestor mask and the related edges
+        Returns the vertices, edges, and ancestor mask
+        """
+        node_to_idx = {name: i for i, name in enumerate(self.DRIVELM_COT_VERTICES)}
 
+        num_source_nodes = len(self.DRIVELM_COT_VERTICES)
+        ancestor_mask = torch.zeros(num_source_nodes, num_source_nodes, dtype=torch.bool)
 
-    def build_dag(self, branch_lengths):
-        # per token in the prompt
+        for (a, b) in self.DRIVELM_COT_EDGES:
+            ancestor_mask[node_to_idx[b], node_to_idx[a]] = True
+        ancestor_mask[[node_to_idx["non_interactive_summary"], node_to_idx["ego_behavior_summary"]], node_to_idx["lanes_enumeration"]] = True
+        ancestor_mask[node_to_idx["ego_behavior_summary"], [node_to_idx["lane_detail_0"], node_to_idx["lane_detail_1"], node_to_idx["lane_detail_2"]]] = True
+        ancestor_mask[[node_to_idx["interactive_summary"], node_to_idx["ego_behavior_summary"]], node_to_idx["critical_objects_enumeration"]] = True
+        ancestor_mask[node_to_idx["ego_behavior_summary"], [node_to_idx["critical_object_0"], node_to_idx["critical_object_1"], node_to_idx["critical_object_2"], node_to_idx["critical_object_3"]]] = True
+        ancestor_mask[[node_to_idx["non_interactive_summary"], node_to_idx["interactive_summary"], node_to_idx["ego_behavior_summary"]], [node_to_idx["traffic_light"], node_to_idx["traffic_sign"]]] = True
+        
+        return ancestor_mask
+    
+    def generate_trajectory(self, images, text_prompt, max_new_tokens=512):
+        formatted_prompt = self.processor.apply_chat_template(
+            text_prompt,
+            tokenize=False,
+            add_generation_prompt=False
+        )
+
+        inputs = self.processor(text=formatted_prompt, images=images if images else None, return_tensors="pt").to(self.model.device)
+
+        ancestor_mask = self.build_ancestor_mask()
+
+        start_time = time.time()
+
+        dag_scheduler = DagScheduler(formatted_prompt, inputs, self, self.DRIVELM_COT_VERTICES, self.DRIVELM_COT_EDGES, self.DRIVELM_COT_MAX_LENGTHS, ancestor_mask)
+        generated_tokens = dag_scheduler.run_parallel_decoding()
+
+        latency = time.time() - start_time
+
+        raw_text = self.processor.decode(generated_tokens, skip_special_tokens=True)
+
+        return self._parse_output(raw_text, latency)
+
+    def _parse_output(self, raw_text, latency):
+        """Extracts the specific tags for evaluation."""
+        cot_match = re.search(r'<cot>(.*?)</cot>', raw_text, re.DOTALL)
+        action_match = re.search(r'<action>(.*?)</action>', raw_text, re.DOTALL)
+        traj_match = re.search(r'<trajectory>(.*?)</trajectory>', raw_text, re.DOTALL)
+        
+        return {
+            "model_type": "Qwen2.5VL_Autoregressive_Baseline",
+            "latency_seconds": latency,
+            "raw_text": raw_text,
+            "chain_of_thought": cot_match.group(1).strip() if cot_match else None,
+            "meta_action": action_match.group(1).strip() if action_match else None,
+            "trajectory": self._parse_coordinates(traj_match.group(1)) if traj_match else []
+        }
+        
+    def _parse_coordinates(self, traj_string):
+        """Safely converts string '[[x,y], ...]' into a Python list of floats."""
+        try:
+            return ast.literal_eval(traj_string.strip())
+        except (ValueError, SyntaxError):
+            return []
