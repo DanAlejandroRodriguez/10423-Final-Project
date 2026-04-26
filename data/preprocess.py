@@ -23,8 +23,8 @@ class PromptFormatter:
         "using exactly these tags: <cot> <action> <trajectory>\n"
         "<cot> step-by-step reasoning </cot>\n"
         "<action> one or multiple of: STOP, YIELD, ACCELERATE, DECELERATE, TURN_LEFT, TURN_RIGHT, LANE_CHANGE </action>\n"
-        "<trajectory> [[x1,y1], [x2,y2], [x3,y3], [x4,y4], [x5,y5], [x6,y6], [x7,y7], [x8,y8], [x9,y9], [x10,y10], [x11,y11], [x12,y12], [x13,y13]] over a 6.4-second horizon </trajectory>\n"
-        "You MUST answer using the exact XML tags <cot>, <action>, and <trajectory>\n"
+        "<trajectory> [[x1,y1], [x2,y2], [x3,y3], [x4,y4], [x5,y5], [x6,y6], [x7,y7], [x8,y8], [x9,y9], [x10,y10], [x11,y11], [x12,y12], [x13,y13]] predicted over the next 6.4-second horizon </trajectory>\n"
+        "You MUST answer using the exact XML tags. You MUST include all three tags in your response: <cot>, <action>, and <trajectory>\n"
     )
 
     CAMERA_LABELS = [
