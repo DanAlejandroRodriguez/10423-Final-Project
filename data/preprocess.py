@@ -22,8 +22,10 @@ class PromptFormatter:
         "Given multi-camera images and a question, output your response "
         "using exactly these tags:\n"
         "<cot> step-by-step reasoning </cot>\n"
-        "<action> one of: STOP, YIELD, ACCELERATE, DECELERATE, TURN_LEFT, TURN_RIGHT, LANE_CHANGE </action>\n"
-        "<trajectory> [[x1,y1],[x2,y2],...] over a 6.4-second horizon </trajectory>"
+        "<action> one of: STOP, YIELD, ACCELERATE, DECELERATE, TURN_LEFT, TURN_RIGHT, LANE_CHANGE </action>\n\n"
+        "Example:\n"
+        "<cot> The road ahead is clear with a green light. No pedestrians or obstacles are present. </cot>\n"
+        "<action> ACCELERATE </action>"
     )
 
     CAMERA_LABELS = [
