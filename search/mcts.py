@@ -7,14 +7,13 @@ class MCTSNode:
         self.parent = parent
         self.children = {}
         self.visits = 0
-        self.visits_per_child = {}
         self.value = 0.0
 
     def ucb_score(self, total_visits, explor_const=1.00):
         """
         Calculate the upper confidence bound for trees
         """
-        return (self.value / self.visits) + explor_const * math.sqrt(math.log(total_visits) / self.visits)
+        return (self.value / self.visits) + explor_const * math.sqrt(math.log(total_visits) / self.visits) if self.visits > 0 else float('inf')
 
     def calculate_reward(self, verifier_score, latency, latency_hyperparam=0.1):
         """

@@ -34,7 +34,6 @@ class QwenBaselineVLA:
         )
 
         image_inputs, video_inputs = process_vision_info(messages)
-
         inputs = self.processor(
             text=[text],
             images=image_inputs if image_inputs else None,
@@ -90,18 +89,18 @@ class QwenBaselineVLA:
 
             latency = time.time() - start_time
 
-            for action in actions:
-                action_key = tuple(action.tolist())
-                new_input_ids = torch.cat([node.state["input_ids"], action.unsqueeze(0)], dim=1)
-                new_state = dict(node.state)
-                new_state["input_ids"] = new_input_ids
-                node.children[action_key] = MCTSNode(state=new_state, parent=node)
+            best_action = max(actions, key=lambda a: self.self_evaluate_state(inputs, node, a))
+            action_key = tuple(best_action.tolist())
+            new_input_ids = torch.cat([node.state["input_ids"], best_action.unsqueeze(0)], dim=1)
+            new_state = dict(node.state)
+            new_state["input_ids"] = new_input_ids
+            node.children[action_key] = MCTSNode(state=new_state, parent=node)
 
-                verifier_score = self.self_evaluate_state(inputs, node, action)
-                reward = node.calculate_reward(verifier_score, latency)
+            verifier_score = self.self_evaluate_state(inputs, node, best_action)
+            reward = node.calculate_reward(verifier_score, latency)
 
-                node.children[action_key].value = reward
-                node.children[action_key].visits = 1
+            node.children[action_key].value = reward
+            node.children[action_key].visits = 1
 
             backprop_node = node
             while backprop_node:
@@ -118,13 +117,14 @@ class QwenBaselineVLA:
         State: {node.state}
         Action: {action}"""
 
-        eval_inputs = self.processor(text=eval_prompt, return_tensors="pt").to(self.model.device)
+        eval_inputs = self.processor(text=eval_prompt, return_tensors="pt")
+        eval_inputs = eval_inputs.to(self.model.device) if hasattr(eval_inputs, "to") else eval_inputs
         with torch.no_grad():
             outputs = self.model(**eval_inputs)
             next_token_logits = outputs.logits[:, -1, :]
 
         choices = ['A', 'B', 'C', 'D', 'E']
-        choice_ids = [self.processor.tokenizer.convert_tokens_to_ids(c) for c in choices]
+        choice_ids = [self.processor.tokenizer.encode(c, add_special_tokens=False)[0] for c in choices]
         choice_logits = next_token_logits[0, choice_ids]
         probs = F.softmax(choice_logits, dim=-1)
 
