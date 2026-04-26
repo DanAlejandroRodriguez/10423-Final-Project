@@ -25,7 +25,7 @@ class DagScheduler():
         branch_lengths = [self.max_lengths[v] for v in self.vertices]
         field_tokens = {v: [] for v in self.vertices}
 
-        past_key_values = self.model.prefill_prefix(self.inputs["input_ids"])
+        past_key_values = None
 
         while len(self.S) != 0:
             device = self.inputs["input_ids"].device
@@ -41,20 +41,31 @@ class DagScheduler():
 
             padding_lengths = [self.max_lengths[v] - len(field_tokens[v]) for v in self.vertices]
 
-            logits = self.model.parallel_forward_pass(
+            new_token_positions = None
+            if past_key_values is not None:
+                new_token_positions = []
+                for v in self.S:
+                    v_idx = self.vertices.index(v)
+                    field_offset = prefix_length + sum(branch_lengths[:v_idx])
+                    new_token_positions.append(field_offset + len(field_tokens[v]) - 1)
+
+            logits, past_key_values = self.model.parallel_forward_pass(
                 input_ids,
                 branch_lengths,
                 ancestor_mask=self.ancestor_mask,
                 padding_lengths=padding_lengths,
                 past_key_values=past_key_values,
+                new_token_positions=new_token_positions,
             )
 
-            logit_offset = 0 if past_key_values is not None else prefix_length
-            for v in self.S:
-                v_idx = self.vertices.index(v)
-                field_offset = logit_offset + sum(branch_lengths[:v_idx])
-                token_pos = field_offset + len(field_tokens[v])
-                next_token = logits[0, token_pos].argmax(-1).item()
+            for i, v in enumerate(self.S):
+                if new_token_positions is not None:
+                    next_token = logits[0, i].argmax(-1).item()
+                else:
+                    v_idx = self.vertices.index(v)
+                    field_offset = prefix_length + sum(branch_lengths[:v_idx])
+                    token_pos = field_offset + len(field_tokens[v])
+                    next_token = logits[0, token_pos].argmax(-1).item()
                 field_tokens[v].append(next_token)
 
             finished = []

@@ -29,7 +29,9 @@ Or with pytest:
 import os
 import sys
 import gc
+import time
 import torch
+from qwen_vl_utils import process_vision_info
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -79,7 +81,6 @@ def evaluate_model(name, model_fn, dataset, test_frames, prompt_fn):
     Swap model_fn to test any model — baseline or FastDriveCoT.
     """
     print(f"\nRunning {name} on {len(test_frames)} frame(s)...\n")
-    from data.preprocess import PromptFormatter
 
     results = []
     for i, entry in enumerate(test_frames):
@@ -94,7 +95,7 @@ def evaluate_model(name, model_fn, dataset, test_frames, prompt_fn):
         print(f"    QA pairs    : {len(entry['qas'])}")
         print(f"    GT traj pts : {len(gt_traj)}")
 
-        text_prompt = PromptFormatter.format(question, num_images=len(images))
+        text_prompt = question
         result = model_fn(images, text_prompt)
 
         assert isinstance(result["latency_seconds"], float), "latency must be float"
@@ -145,13 +146,14 @@ def run_integration_test():
     # 3. Load model — FastDriveVLA supports both baseline and parallel paths
     print(f"\n[3/4] Loading {MODEL_ID}...")
     from models.fastdrive import FastDriveVLA
+    from data.preprocess import PromptFormatter
     model = FastDriveVLA(model_id=MODEL_ID)
 
     # 4. Baseline path — swap model.generate_trajectory for any other model here
     baseline_results = evaluate_model(
         name="[4/5] Baseline (autoregressive)",
         model_fn=lambda images, prompt: model.generate_trajectory(
-            images=images, text_prompt=prompt, max_new_tokens=512
+            images=images, question=prompt, max_new_tokens=512
         ),
         dataset=dataset,
         test_frames=test_frames,
@@ -165,7 +167,7 @@ def run_integration_test():
     fastdrive_results = evaluate_model(
         name="[5/5] FastDriveCoT (parallel DAG)",
         model_fn=lambda images, prompt: model.generate_trajectory_parallel(
-            images=images, text_prompt=prompt
+            images=images, text_prompt=PromptFormatter.format(prompt, images=images)
         ),
         dataset=dataset,
         test_frames=test_frames,
@@ -175,15 +177,51 @@ def run_integration_test():
     for r in fastdrive_results:
         assert r.get("model_type") == "Qwen2.5VL_FastDriveCoT_Parallel", "wrong model_type"
 
+    gc.collect()
+    torch.cuda.empty_cache()
+
+    # 6. MCTS path
+    def mcts_model_fn(images, question):
+        messages = PromptFormatter.format(question=question, images=images)
+        text = model.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        image_inputs, video_inputs = process_vision_info(messages)
+        inputs = model.processor(
+            text=[text],
+            images=image_inputs if image_inputs else None,
+            videos=video_inputs if video_inputs else None,
+            padding=True,
+            return_tensors="pt",
+        ).to(model.model.device)
+        start_time = time.time()
+        best_action_key = model.mcts_generate(inputs, max_new_tokens=50, iterations=10)
+        latency = time.time() - start_time
+        raw_text = model.processor.decode(list(best_action_key), skip_special_tokens=True)
+        result = model._parse_output(raw_text, latency)
+        result["model_type"] = "Qwen2.5VL_MCTS"
+        return result
+
+    mcts_results = evaluate_model(
+        name="[6/6] MCTS",
+        model_fn=mcts_model_fn,
+        dataset=dataset,
+        test_frames=test_frames,
+        prompt_fn=None,
+    )
+
+    for r in mcts_results:
+        assert r.get("model_type") == "Qwen2.5VL_MCTS", "wrong model_type"
+
     # Summary
     avg_baseline  = sum(r["latency_seconds"] for r in baseline_results)  / len(baseline_results)
     avg_fastdrive = sum(r["latency_seconds"] for r in fastdrive_results) / len(fastdrive_results)
+    avg_mcts      = sum(r["latency_seconds"] for r in mcts_results)      / len(mcts_results)
     speedup = avg_baseline / avg_fastdrive if avg_fastdrive > 0 else float('nan')
 
     print("=" * 60)
     print(f"  Avg baseline latency    : {avg_baseline:.2f}s")
     print(f"  Avg FastDriveCoT latency: {avg_fastdrive:.2f}s")
-    print(f"  Speedup                 : {speedup:.2f}x  (paper target: 3-4x)")
+    print(f"  Avg MCTS latency        : {avg_mcts:.2f}s")
+    print(f"  Speedup (FastDriveCoT)  : {speedup:.2f}x  (paper target: 3-4x)")
     print("=" * 60)
     print("✓ Pipeline end-to-end verified.")
     print("=" * 60)

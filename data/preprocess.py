@@ -23,9 +23,16 @@ class PromptFormatter:
         "using exactly these tags:\n"
         "<cot> step-by-step reasoning </cot>\n"
         "<action> one of: STOP, YIELD, ACCELERATE, DECELERATE, TURN_LEFT, TURN_RIGHT, LANE_CHANGE </action>\n\n"
-        "Example:\n"
+        "Examples:\n\n"
+        "Example 1:\n"
         "<cot> The road ahead is clear with a green light. No pedestrians or obstacles are present. </cot>\n"
-        "<action> ACCELERATE </action>"
+        "<action> ACCELERATE </action>\n\n"
+        "Example 2:\n"
+        "<cot> A pedestrian is crossing at the intersection and the traffic light is red. The ego vehicle must stop. </cot>\n"
+        "<action> STOP </action>\n\n"
+        "Example 3:\n"
+        "<cot> The vehicle ahead is braking. There is a stop sign visible. The ego vehicle should slow down. </cot>\n"
+        "<action> DECELERATE </action>"
     )
 
     CAMERA_LABELS = [

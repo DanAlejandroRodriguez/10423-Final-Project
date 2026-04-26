@@ -1,6 +1,7 @@
 import torch
 import time
 import re
+from qwen_vl_utils import process_vision_info
 from .baseline import QwenBaselineVLA
 from .dag_scheduler import DagScheduler
 from data.preprocess import PromptFormatter
@@ -141,7 +142,7 @@ class FastDriveVLA(QwenBaselineVLA):
 
             if ancestor_mask is not None:
                 for j, is_ancestor in enumerate(ancestor_mask[i]):
-                    if is_ancestor:
+                    if bool(is_ancestor):
                         anc_start = offsets[j]
                         anc_real_end = anc_start + branch_lengths[j] - padding_lengths[j]
                         mask[start:real_end, anc_start:anc_real_end] = True
@@ -186,46 +187,33 @@ class FastDriveVLA(QwenBaselineVLA):
             )
         return outputs.past_key_values
 
-    def parallel_forward_pass(self, input_ids, branch_lengths, ancestor_mask=None, padding_lengths=None, position_ids=None, past_key_values=None):
+    def parallel_forward_pass(self, input_ids, branch_lengths, ancestor_mask=None, padding_lengths=None, position_ids=None, past_key_values=None, new_token_positions=None):
         """
         Executes a single forward pass with the DAG attention mask.
 
-        The DAG scheduler constructs input_ids by concatenating
-        [prefix_tokens, branch_1_tokens, ..., branch_n_tokens].
-        When past_key_values is provided, only field slot tokens are processed.
-        Returns logits of shape (1, slots_len, vocab_size) with KV cache,
-        or (1, total_seq_len, vocab_size) without.
+        Step 1 (no cache): full sequence with custom DAG mask, use_cache=True.
+        Step 2+ (with cache): only new tokens with their position IDs, no mask needed
+        since the DAG attention pattern is already encoded in the cached KV states.
+        Returns (logits, past_key_values).
         """
         device = self.model.device
         input_ids = input_ids.to(device)
+        prefix_length = input_ids.shape[1] - sum(branch_lengths)
 
-        if past_key_values is not None:
-            prefix_length = past_key_values[0][0].shape[2]
-            slots_input_ids = input_ids[:, prefix_length:]
-
-            bool_mask = self.build_dag_attention_mask(
-                prefix_length, branch_lengths, ancestor_mask, padding_lengths
-            ).to(device)
-
-            dtype = self.model.dtype
-            additive_mask = torch.zeros_like(bool_mask, dtype=dtype)
-            additive_mask = additive_mask.masked_fill(~bool_mask, torch.finfo(dtype).min)
-            additive_mask = additive_mask.unsqueeze(0).unsqueeze(0)
-
+        if past_key_values is not None and new_token_positions is not None:
+            new_ids = input_ids[:, new_token_positions].to(device)
             if position_ids is None:
                 position_ids = self.build_dag_position_ids(prefix_length, branch_lengths)
-            slot_position_ids = position_ids[:, prefix_length:].to(device)
+            new_pos = position_ids[:, new_token_positions].to(device)
 
             with torch.no_grad():
                 outputs = self.model(
-                    input_ids=slots_input_ids,
-                    attention_mask=additive_mask,
-                    position_ids=slot_position_ids,
+                    input_ids=new_ids,
+                    position_ids=new_pos,
                     past_key_values=past_key_values,
-                    use_cache=False,
+                    use_cache=True,
                 )
-            return outputs.logits
-        prefix_length = input_ids.shape[1] - sum(branch_lengths)
+            return outputs.logits, outputs.past_key_values
 
         bool_mask = self.build_dag_attention_mask(
             prefix_length, branch_lengths, ancestor_mask, padding_lengths
@@ -245,10 +233,10 @@ class FastDriveVLA(QwenBaselineVLA):
                 input_ids=input_ids,
                 attention_mask=additive_mask,
                 position_ids=position_ids,
-                use_cache=False,
+                use_cache=True,
             )
 
-        return outputs.logits
+        return outputs.logits, outputs.past_key_values
     
     def build_ancestor_mask(self):
         """
@@ -284,16 +272,19 @@ class FastDriveVLA(QwenBaselineVLA):
         question = text_prompt[1]["content"][-1]["text"].replace("Question: ", "")
         full_question = question + "\n\n" + self.COT_EXAMPLE + self.COT_TEMPLATE
 
-        messages = PromptFormatter.format(full_question, num_images=len(images) if images else 0)
+        messages = PromptFormatter.format(full_question, images=images)
         formatted_prompt = self.processor.apply_chat_template(
             messages,
             tokenize=False,
             add_generation_prompt=True
         )
 
+        image_inputs, video_inputs = process_vision_info(messages)
         inputs = self.processor(
-            text=formatted_prompt,
-            images=images if images else None,
+            text=[formatted_prompt],
+            images=image_inputs if image_inputs else None,
+            videos=video_inputs if video_inputs else None,
+            padding=True,
             return_tensors="pt"
         ).to(self.model.device)
 

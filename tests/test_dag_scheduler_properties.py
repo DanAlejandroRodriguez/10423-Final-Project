@@ -26,13 +26,12 @@ sys.modules.setdefault("qwen_vl_utils", MagicMock())
 def make_mock_model(vocab_size=32):
     mock = MagicMock()
     def fake_forward(input_ids, branch_lengths, **kwargs):
-        total_len = input_ids.shape[1]
-        return torch.zeros(1, total_len, vocab_size)
+        new_positions = kwargs.get("new_token_positions")
+        out_len = len(new_positions) if new_positions is not None else input_ids.shape[1]
+        return torch.zeros(1, out_len, vocab_size), None
     mock.parallel_forward_pass.side_effect = fake_forward
     mock.model.device = torch.device("cpu")
     return mock
-
-
 def make_inputs(prefix_len=5):
     return {"input_ids": torch.zeros(1, prefix_len, dtype=torch.long)}
 
@@ -151,7 +150,7 @@ class TestSchedulingOrder:
 
         def tracking_forward(input_ids, branch_lengths, **kwargs):
             active_sets.append(list(scheduler_ref[0].S))
-            return torch.zeros(1, input_ids.shape[1], 32)
+            return torch.zeros(1, input_ids.shape[1], 32), None
 
         model.parallel_forward_pass.side_effect = tracking_forward
         scheduler = DagScheduler("", make_inputs(), model, vertices, edges, max_lengths)
@@ -178,7 +177,7 @@ class TestSchedulingOrder:
         def tracking_forward(input_ids, branch_lengths, **kwargs):
             if first_step[0] is None:
                 first_step[0] = list(scheduler_ref[0].S)
-            return torch.zeros(1, input_ids.shape[1], 32)
+            return torch.zeros(1, input_ids.shape[1], 32), None
 
         model.parallel_forward_pass.side_effect = tracking_forward
         scheduler = DagScheduler("", make_inputs(), model, vertices, edges, max_lengths)
@@ -203,7 +202,7 @@ class TestSchedulingOrder:
 
         def tracking_forward(input_ids, branch_lengths, **kwargs):
             active_sets.append(list(scheduler_ref[0].S))
-            return torch.zeros(1, input_ids.shape[1], 32)
+            return torch.zeros(1, input_ids.shape[1], 32), None
 
         model.parallel_forward_pass.side_effect = tracking_forward
         scheduler = DagScheduler("", make_inputs(), model, vertices, edges, max_lengths)
@@ -263,7 +262,7 @@ class TestCriticalPath:
 
         def counting_forward(input_ids, branch_lengths, **kwargs):
             call_count[0] += 1
-            return torch.zeros(1, input_ids.shape[1], 32)
+            return torch.zeros(1, input_ids.shape[1], 32), None
 
         model.parallel_forward_pass.side_effect = counting_forward
         scheduler = DagScheduler("", make_inputs(), model, vertices, edges, max_lengths)
@@ -294,7 +293,7 @@ class TestCriticalPath:
             model = make_mock_model()
             def counting_forward(input_ids, branch_lengths, **kwargs):
                 count[0] += 1
-                return torch.zeros(1, input_ids.shape[1], 32)
+                return torch.zeros(1, input_ids.shape[1], 32), None
             model.parallel_forward_pass.side_effect = counting_forward
             scheduler = DagScheduler("", make_inputs(), model, vertices, edges, max_lengths)
             scheduler.run_parallel_decoding()
