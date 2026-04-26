@@ -3,6 +3,8 @@ main.py — DriveLM evaluation pipeline.
 """
 
 import argparse
+from dotenv import load_dotenv
+load_dotenv()
 from data.drivelm_dataset import DriveLMDataset
 from models import QwenBaselineVLA
 from evaluation import DriveLMEvaluator
@@ -36,7 +38,8 @@ def main():
         print(result.get("raw_text", ""))
         print("------------------------\n")
         
-        evaluator.add(result, sample["gt_trajectory"], sample["answer"])
+        evaluator.add(result, sample["gt_trajectory"], sample["answer"],
+                      question=sample["question"], token=sample["token"])
 
     # Print results and save
     _print_summary(evaluator.summarise())
