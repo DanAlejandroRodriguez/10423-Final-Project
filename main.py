@@ -53,7 +53,7 @@ def main():
         elif args.model == 1:
             result = model.mcts_generate(sample["images"], messages)
         elif args.model == 2:
-            result = model.generate_trajectory_parallel(sample["images"], messages)
+            result = model.generate_trajectory(sample["images"], messages)
         elif args.model == 3:
             result = model.generate_trajectory_hybrid(sample["images"], messages)
         else:
