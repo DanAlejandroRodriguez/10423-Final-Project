@@ -280,7 +280,7 @@ class FastDriveVLA(QwenBaselineVLA):
 
         return ancestor_mask
     
-    def generate_trajectory_parallel(self, images, text_prompt, max_new_tokens=512):
+    def generate_trajectory(self, images, text_prompt, max_new_tokens=512):
         question = text_prompt[1]["content"][-1]["text"].replace("Question: ", "")
         full_question = question + "\n\n" + self.COT_EXAMPLE + self.COT_TEMPLATE
 

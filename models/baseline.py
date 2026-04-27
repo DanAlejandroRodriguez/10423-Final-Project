@@ -17,23 +17,23 @@ class QwenBaselineVLA:
         self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
             model_id,
             torch_dtype=torch.bfloat16,
+            # torch_dtype=torch.float16,
             device_map="auto",
             attn_implementation=attn_implementation
         )
         self.model.eval()
 
-    def generate_trajectory(self, images, question, max_new_tokens=512):
+    def generate_trajectory(self, images, text_prompt, max_new_tokens=512):
         """
         The standard interface for all the models.
+        Accepts pre-formatted messages from PromptFormatter.format().
         Returns a dictionary containing the parsed components and latency.
         """
-        messages = PromptFormatter.format(question=question, images=images)
-
         text = self.processor.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
+            text_prompt, tokenize=False, add_generation_prompt=True
         )
 
-        image_inputs, video_inputs = process_vision_info(messages)
+        image_inputs, video_inputs = process_vision_info(text_prompt)
         inputs = self.processor(
             text=[text],
             images=image_inputs if image_inputs else None,
@@ -63,11 +63,27 @@ class QwenBaselineVLA:
         
         return self._parse_output(raw_text, latency)
 
-    def mcts_generate(self, inputs, max_new_tokens=512, iterations=50):
+    def mcts_generate(self, images, text_prompt, max_new_tokens=512, iterations=50):
         """
         Runs MCTS on the input image and prompt.
-        Returns the action with the highest number of visits.
+        Accepts the same (images, text_prompt) interface as generate_trajectory.
+        Returns a parsed result dictionary.
         """
+        # Input processing — same as generate_trajectory
+        text = self.processor.apply_chat_template(
+            text_prompt, tokenize=False, add_generation_prompt=True
+        )
+
+        image_inputs, video_inputs = process_vision_info(text_prompt)
+        inputs = self.processor(
+            text=[text],
+            images=image_inputs if image_inputs else None,
+            videos=video_inputs if video_inputs else None,
+            padding=True,
+            return_tensors="pt",
+        ).to(self.model.device)
+
+        # MCTS search
         root = MCTSNode(state=inputs)
         prefix_length = inputs["input_ids"].shape[1]
 
@@ -75,13 +91,13 @@ class QwenBaselineVLA:
             prefix_out = self.model(**inputs, use_cache=True)
         prefix_kv = prefix_out.past_key_values
 
+        start_time = time.time()
+
         for _ in range(iterations):
             node = root
 
             while node.children:
                 node = max(node.children.values(), key=lambda n: n.ucb_score(root.visits))
-
-            start_time = time.time()
 
             node_new_ids = node.state["input_ids"][:, prefix_length:].to(self.model.device)
             if node_new_ids.shape[1] > 0:
@@ -94,17 +110,35 @@ class QwenBaselineVLA:
             else:
                 node_kv = prefix_kv
 
-            actions = self.model.generate(
-                input_ids=torch.zeros(1, 1, dtype=torch.long, device=self.model.device),
-                past_key_values=node_kv,
-                do_sample=True,
-                temperature=0.7,
-                top_p=0.9,
-                num_return_sequences=5,
-                max_new_tokens=max_new_tokens,
-            )
-
-            latency = time.time() - start_time
+            # Manual sampling loop (replaces model.generate which doesn't support
+            # externally managed past_key_values in newer transformers)
+            num_candidates = 5
+            actions = []
+            for _ in range(num_candidates):
+                generated_ids = []
+                kv = node_kv
+                # Start with the last token from the prefix as the seed
+                cur_input = inputs["input_ids"][:, -1:].to(self.model.device)
+                for _step in range(max_new_tokens):
+                    with torch.no_grad():
+                        out = self.model(input_ids=cur_input, past_key_values=kv, use_cache=True)
+                    kv = out.past_key_values
+                    logits = out.logits[:, -1, :] / 0.7  # temperature
+                    # Top-p (nucleus) sampling
+                    sorted_logits, sorted_indices = torch.sort(logits, descending=True)
+                    probs = torch.softmax(sorted_logits, dim=-1)
+                    cumulative_probs = torch.cumsum(probs, dim=-1)
+                    mask = cumulative_probs - probs > 0.9
+                    sorted_logits[mask] = float('-inf')
+                    probs = torch.softmax(sorted_logits, dim=-1)
+                    next_idx = torch.multinomial(probs, num_samples=1)
+                    next_token = sorted_indices.gather(-1, next_idx)
+                    generated_ids.append(next_token.item())
+                    cur_input = next_token
+                    # Stop on EOS
+                    if next_token.item() == self.processor.tokenizer.eos_token_id:
+                        break
+                actions.append(torch.tensor(generated_ids, device=self.model.device))
 
             best_action = max(actions, key=lambda a: self.self_evaluate_state(inputs, node, a))
             action_key = tuple(best_action.tolist())
@@ -114,7 +148,8 @@ class QwenBaselineVLA:
             node.children[action_key] = MCTSNode(state=new_state, parent=node)
 
             verifier_score = self.self_evaluate_state(inputs, node, best_action)
-            reward = node.calculate_reward(verifier_score, latency)
+            iter_latency = time.time() - start_time
+            reward = node.calculate_reward(verifier_score, iter_latency)
 
             node.children[action_key].value = reward
             node.children[action_key].visits = 1
@@ -125,7 +160,16 @@ class QwenBaselineVLA:
                 backprop_node.value += reward
                 backprop_node = backprop_node.parent
 
-        return max(root.children.items(), key=lambda item: item[1].visits)[0]
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+
+        latency = time.time() - start_time
+
+        # Decode the best path
+        best_tokens = max(root.children.items(), key=lambda item: item[1].visits)[0]
+        raw_text = self.processor.decode(torch.tensor(best_tokens), skip_special_tokens=True)
+
+        return self._parse_output(raw_text, latency)
 
     def self_evaluate_state(self, inputs, node, action):
         eval_prompt = f""" Task: Given an action and the current state, score the state and action pair by
