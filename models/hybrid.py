@@ -54,9 +54,10 @@ class HybridVLA(FastDriveVLA):
             ``latency_seconds``, and ``model_type``.
         """
         if num_critical_objects < self.object_threshold:
-            # Simple scene — use FastDriveCoT parallel DAG decoding
-            result = super().generate_trajectory_parallel(images, text_prompt, max_new_tokens=max_new_tokens)
-            result["routing_decision"] = "FastDriveCoT"
+            # Simple scene — use baseline
+            # result = super().generate_trajectory_parallel(images, text_prompt, max_new_tokens=max_new_tokens)
+            result = self.generate_trajectory(images, text_prompt, max_new_tokens=max_new_tokens)
+            result["routing_decision"] = "baseline"
             result["routing_reason"] = (
                 f"{num_critical_objects} critical objects < threshold {self.object_threshold}"
             )
