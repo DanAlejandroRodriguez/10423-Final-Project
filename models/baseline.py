@@ -63,7 +63,7 @@ class QwenBaselineVLA:
         
         return self._parse_output(raw_text, latency)
 
-    def mcts_generate(self, images, text_prompt, max_new_tokens=512, iterations=50):
+    def mcts_generate(self, images, text_prompt, max_new_tokens=512, iterations=5):
         """
         Runs MCTS on the input image and prompt.
         Accepts the same (images, text_prompt) interface as generate_trajectory.
@@ -212,6 +212,7 @@ class QwenBaselineVLA:
     def _parse_coordinates(self, traj_string):
         """Safely converts string '[[x,y], ...]' into a Python list of floats."""
         try:
-            return ast.literal_eval(traj_string.strip())
+            traj = ast.literal_eval(traj_string.strip())
+            return traj[:13]
         except (ValueError, SyntaxError):
             return []
