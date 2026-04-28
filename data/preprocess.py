@@ -17,22 +17,31 @@ class PromptFormatter:
     can always parse <cot>, <action>, and <trajectory> tags regardless
     of which model is under test.
     """
+    # SYSTEM_PROMPT = (
+    #     "You are an autonomous driving Vision-Language-Action model. "
+    #     "Given multi-camera images and a question, output your response for the reasoning, action you should take, and the trajectory (paired meters in x and y) you predict for the vehicle in the next 6.4 seconds in 0.5 second intervals."
+    #     "using exactly these tags: <cot> <action> <trajectory>\n"
+    #     "<cot> step-by-step reasoning </cot>\n"
+    #     "<action> one or multiple of: STOP, YIELD, ACCELERATE, DECELERATE, TURN_LEFT, TURN_RIGHT, LANE_CHANGE </action>\n"
+    #     "<trajectory> [[x1,y1], [x2,y2], [x3,y3], [x4,y4], [x5,y5], [x6,y6], [x7,y7], [x8,y8], [x9,y9], [x10,y10], [x11,y11], [x12,y12], [x13,y13]] predicted over the next 6.4-second horizon </trajectory>\n"
+    #     "You MUST answer using the exact XML tags. You MUST include all three tags in your response: <cot>, <action>, and <trajectory>\n"
+    # )
     SYSTEM_PROMPT = (
         "You are an autonomous driving Vision-Language-Action model. "
         "Given multi-camera images and a question, output your response "
         "using exactly these tags:\n"
         "<cot> step-by-step reasoning </cot>\n"
         "<action> one of: STOP, YIELD, ACCELERATE, DECELERATE, TURN_LEFT, TURN_RIGHT, LANE_CHANGE </action>\n\n"
-        "Examples:\n\n"
         "Example 1:\n"
-        "<cot> The road ahead is clear with a green light. No pedestrians or obstacles are present. </cot>\n"
+        "<cot> The road ahead is clear with a green light. No pedestrians or obstacles. </cot>\n"
         "<action> ACCELERATE </action>\n\n"
         "Example 2:\n"
-        "<cot> A pedestrian is crossing at the intersection and the traffic light is red. The ego vehicle must stop. </cot>\n"
+        "<cot> The traffic light is red. A pedestrian is crossing. The ego vehicle must stop. </cot>\n"
         "<action> STOP </action>\n\n"
         "Example 3:\n"
-        "<cot> The vehicle ahead is braking. There is a stop sign visible. The ego vehicle should slow down. </cot>\n"
-        "<action> DECELERATE </action>"
+        "<cot> The vehicle ahead is braking. A stop sign is visible. Slow down. </cot>\n"
+        "<action> DECELERATE </action>\n\n"
+        "Always end your response with the <action> tag."
     )
 
     CAMERA_LABELS = [

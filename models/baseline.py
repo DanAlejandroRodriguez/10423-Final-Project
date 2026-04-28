@@ -22,12 +22,19 @@ class QwenBaselineVLA:
         )
         self.model.eval()
 
-    def generate_trajectory(self, images, question, max_new_tokens=512):
+    def generate_trajectory(self, images, question, max_new_tokens=200):
         """
         The standard interface for all the models.
         Returns a dictionary containing the parsed components and latency.
         """
-        messages = PromptFormatter.format(question=question, images=images)
+        driving_question = (
+            "What should the ego vehicle do next? "
+            "Be concise. Describe what you see briefly, then give the action.\n\n"
+            "Respond with:\n"
+            "<cot> brief reasoning </cot>\n"
+            "<action> STOP | YIELD | ACCELERATE | DECELERATE | TURN_LEFT | TURN_RIGHT | LANE_CHANGE </action>"
+        )
+        messages = PromptFormatter.format(question=driving_question, images=images)
 
         text = self.processor.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=True
@@ -83,20 +90,8 @@ class QwenBaselineVLA:
 
             start_time = time.time()
 
-            node_new_ids = node.state["input_ids"][:, prefix_length:].to(self.model.device)
-            if node_new_ids.shape[1] > 0:
-                with torch.no_grad():
-                    node_kv = self.model(
-                        input_ids=node_new_ids,
-                        past_key_values=prefix_kv,
-                        use_cache=True,
-                    ).past_key_values
-            else:
-                node_kv = prefix_kv
-
             actions = self.model.generate(
-                input_ids=torch.zeros(1, 1, dtype=torch.long, device=self.model.device),
-                past_key_values=node_kv,
+                **node.state,
                 do_sample=True,
                 temperature=0.7,
                 top_p=0.9,

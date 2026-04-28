@@ -1,3 +1,4 @@
+import copy
 import torch
 import time
 import re
@@ -43,131 +44,69 @@ class FastDriveVLA(QwenBaselineVLA):
     ]
 
     DRIVELM_COT_MAX_LENGTHS = {
-        "lighting": 8, "road_condition": 10, "weather": 8,
-        "junction_type": 10, "road_type": 10,
-        "traffic_light": 15, "traffic_sign": 20,
-        "lanes_enumeration": 20,
-        "lane_detail_0": 40, "lane_detail_1": 40, "lane_detail_2": 40,
-        "critical_objects_enumeration": 30,
-        "critical_object_0": 50, "critical_object_1": 50,
-        "critical_object_2": 50, "critical_object_3": 50,
-        "traffic_regulation_summary": 40,
-        "non_interactive_summary": 50, "interactive_summary": 50,
-        "ego_behavior_summary": 60,
+        "lighting": 3, "road_condition": 4, "weather": 3,
+        "junction_type": 4, "road_type": 4,
+        "traffic_light": 3, "traffic_sign": 4,
+        "lanes_enumeration": 4,
+        "lane_detail_0": 6, "lane_detail_1": 6, "lane_detail_2": 6,
+        "critical_objects_enumeration": 6,
+        "critical_object_0": 8, "critical_object_1": 8,
+        "critical_object_2": 8, "critical_object_3": 8,
+        "traffic_regulation_summary": 6,
+        "non_interactive_summary": 8, "interactive_summary": 8,
+        "ego_behavior_summary": 10,
     }
 
-    # Field name template per Section 3.1: "field name: field content" one entry per line
-    COT_TEMPLATE = (
-        "Describe the driving scene using these fields:\n"
-        "lighting: \n"
-        "road_condition: \n"
-        "weather: \n"
-        "junction_type: \n"
-        "road_type: \n"
-        "traffic_light: \n"
-        "traffic_sign: \n"
-        "lanes_enumeration: \n"
-        "lane_detail_0: \n"
-        "lane_detail_1: \n"
-        "lane_detail_2: \n"
-        "critical_objects_enumeration: \n"
-        "critical_object_0: \n"
-        "critical_object_1: \n"
-        "critical_object_2: \n"
-        "critical_object_3: \n"
-        "traffic_regulation_summary: \n"
-        "non_interactive_summary: \n"
-        "interactive_summary: \n"
-        "ego_behavior_summary: \n"
-    )
-
-    # Multi-shot example for zero-shot format compliance
     COT_EXAMPLE = (
-        "Example output:\n"
+        "Fill in each field with a short phrase describing what you observe.\n\n"
+        "Example 1:\n"
         "lighting: bright daylight\n"
         "road_condition: dry asphalt\n"
-        "weather: clear\n"
+        "weather: clear sky\n"
         "junction_type: T-intersection\n"
         "road_type: urban road\n"
         "traffic_light: green\n"
-        "traffic_sign: speed limit 30\n"
-        "lanes_enumeration: two lanes ahead\n"
+        "traffic_sign: speed limit sign\n"
+        "lanes_enumeration: two lanes\n"
         "lane_detail_0: ego lane clear\n"
-        "lane_detail_1: adjacent lane has slow vehicle\n"
+        "lane_detail_1: adjacent lane occupied\n"
         "lane_detail_2: N/A\n"
-        "critical_objects_enumeration: one pedestrian, one car\n"
-        "critical_object_0: pedestrian on sidewalk, not crossing\n"
-        "critical_object_1: car ahead, moving slowly\n"
+        "critical_objects_enumeration: one car\n"
+        "critical_object_0: car ahead moving slowly\n"
+        "critical_object_1: N/A\n"
         "critical_object_2: N/A\n"
         "critical_object_3: N/A\n"
-        "traffic_regulation_summary: green light, 30 km/h limit\n"
-        "non_interactive_summary: road is clear, no obstacles in path\n"
-        "interactive_summary: slow car ahead requires attention\n"
-        "ego_behavior_summary: maintain speed, prepare to decelerate\n"
-        "Now describe the current scene:\n"
+        "traffic_regulation_summary: green light, proceed\n"
+        "non_interactive_summary: road ahead is clear\n"
+        "interactive_summary: slow car requires attention\n"
+        "ego_behavior_summary: ACCELERATE, maintain speed\n\n"
+        "Example 2:\n"
+        "lighting: night, street lamps on\n"
+        "road_condition: wet surface\n"
+        "weather: rainy\n"
+        "junction_type: signalized intersection\n"
+        "road_type: urban road\n"
+        "traffic_light: red\n"
+        "traffic_sign: stop sign\n"
+        "lanes_enumeration: one lane\n"
+        "lane_detail_0: blocked by red light\n"
+        "lane_detail_1: N/A\n"
+        "lane_detail_2: N/A\n"
+        "critical_objects_enumeration: pedestrians\n"
+        "critical_object_0: pedestrian crossing\n"
+        "critical_object_1: N/A\n"
+        "critical_object_2: N/A\n"
+        "critical_object_3: N/A\n"
+        "traffic_regulation_summary: red light, must stop\n"
+        "non_interactive_summary: intersection blocked\n"
+        "interactive_summary: pedestrians crossing ahead\n"
+        "ego_behavior_summary: STOP, wait for green\n\n"
     )
 
     def __init__(self, model_id="Qwen/Qwen2.5-VL-7B-Instruct"):
-        super().__init__(model_id=model_id, attn_implementation="sdpa")
-
-    def build_dag_attention_mask(self, prefix_length, branch_lengths, ancestor_mask=None, padding_lengths=None):
-        """
-        Builds a 2D boolean causal attention mask for parallel CoT decoding.
-
-        Per FastDriveCoT (Eq. 1): token in field B attends to field A only if A
-        is an ancestor of B in the dependency graph. Fixed (prefix) tokens are
-        visible to all following tokens regardless of dependencies. Padding
-        tokens are invisible to every other token in the sequence.
-        """
-        total_len = prefix_length + sum(branch_lengths)
-        mask = torch.zeros(total_len, total_len, dtype=torch.bool)
-
-        mask[:prefix_length, :prefix_length] = torch.tril(
-            torch.ones(prefix_length, prefix_length, dtype=torch.bool)
-        )
-
-        offsets = []
-        offset = prefix_length
-        for branch_len in branch_lengths:
-            offsets.append(offset)
-            offset += branch_len
-
-        padding_lengths = padding_lengths or [0] * len(branch_lengths)
-
-        for i, (branch_len, pad_len, start) in enumerate(zip(branch_lengths, padding_lengths, offsets)):
-            real_len = branch_len - pad_len
-            real_end = start + real_len
-
-            mask[start:real_end, :prefix_length] = True
-
-            if ancestor_mask is not None:
-                for j, is_ancestor in enumerate(ancestor_mask[i]):
-                    if bool(is_ancestor):
-                        anc_start = offsets[j]
-                        anc_real_end = anc_start + branch_lengths[j] - padding_lengths[j]
-                        mask[start:real_end, anc_start:anc_real_end] = True
-
-            mask[start:real_end, start:real_end] = torch.tril(
-                torch.ones(real_len, real_len, dtype=torch.bool)
-            )
-
-            pad_start = real_end
-            pad_end = start + branch_len
-            if pad_start < pad_end:
-                mask[pad_start:pad_end, pad_start:pad_end] = torch.eye(
-                    pad_end - pad_start, dtype=torch.bool
-                )
-
-        return mask
+        super().__init__(model_id=model_id, attn_implementation="eager")
 
     def build_dag_position_ids(self, prefix_length, branch_lengths):
-        """
-        Builds position IDs for the DAG layout.
-
-        All branches share the same position range starting at prefix_length,
-        preventing RoPE from treating branches as a single long sequence.
-        Returns position_ids of shape (1, total_seq_len).
-        """
         prefix_pos = torch.arange(prefix_length)
         branch_pos = torch.cat([
             torch.arange(prefix_length, prefix_length + blen)
@@ -175,74 +114,80 @@ class FastDriveVLA(QwenBaselineVLA):
         ])
         return torch.cat([prefix_pos, branch_pos]).unsqueeze(0)
 
-    def prefill_prefix(self, prefix_input_ids):
-        """
-        Run one forward pass over the prefix to populate the KV cache.
-        Returns past_key_values to be reused across all decoding steps.
-        """
-        with torch.no_grad():
-            outputs = self.model(
-                input_ids=prefix_input_ids.to(self.model.device),
-                use_cache=True,
-            )
-        return outputs.past_key_values
-
     def parallel_forward_pass(self, input_ids, branch_lengths, ancestor_mask=None, padding_lengths=None, position_ids=None, past_key_values=None, new_token_positions=None):
-        """
-        Executes a single forward pass with the DAG attention mask.
-
-        Step 1 (no cache): full sequence with custom DAG mask, use_cache=True.
-        Step 2+ (with cache): only new tokens with their position IDs, no mask needed
-        since the DAG attention pattern is already encoded in the cached KV states.
-        Returns (logits, past_key_values).
-        """
         device = self.model.device
         input_ids = input_ids.to(device)
         prefix_length = input_ids.shape[1] - sum(branch_lengths)
 
-        if past_key_values is not None and new_token_positions is not None:
-            new_ids = input_ids[:, new_token_positions].to(device)
-            if position_ids is None:
-                position_ids = self.build_dag_position_ids(prefix_length, branch_lengths)
-            new_pos = position_ids[:, new_token_positions].to(device)
-
-            with torch.no_grad():
-                outputs = self.model(
-                    input_ids=new_ids,
-                    position_ids=new_pos,
-                    past_key_values=past_key_values,
-                    use_cache=True,
-                )
-            return outputs.logits, outputs.past_key_values
-
-        bool_mask = self.build_dag_attention_mask(
-            prefix_length, branch_lengths, ancestor_mask, padding_lengths
-        ).to(device)
-
-        dtype = self.model.dtype
-        additive_mask = torch.zeros_like(bool_mask, dtype=dtype)
-        additive_mask = additive_mask.masked_fill(~bool_mask, torch.finfo(dtype).min)
-        additive_mask = additive_mask.unsqueeze(0).unsqueeze(0)
-
-        if position_ids is None:
-            position_ids = self.build_dag_position_ids(prefix_length, branch_lengths)
-        position_ids = position_ids.to(device)
-
+        prefix_ids = input_ids[:, :prefix_length].to(device)
+        extra = {}
+        if hasattr(self, '_last_inputs'):
+            for k in ('pixel_values', 'image_grid_thw'):
+                if k in self._last_inputs:
+                    extra[k] = self._last_inputs[k].to(device)
         with torch.no_grad():
-            outputs = self.model(
-                input_ids=input_ids,
-                attention_mask=additive_mask,
-                position_ids=position_ids,
+            prefix_out = self.model(input_ids=prefix_ids, use_cache=True, **extra)
+        return prefix_out.logits, prefix_out.past_key_values
+
+    def _get_stop_token_ids(self):
+        if hasattr(self, '_stop_ids'):
+            return self._stop_ids
+        nl_ids = self.processor.tokenizer.encode('\n', add_special_tokens=False)
+        eos_id = self.processor.tokenizer.eos_token_id
+        im_end_ids = self.processor.tokenizer.encode('<|im_end|>', add_special_tokens=False)
+        self._stop_ids = set(nl_ids + im_end_ids + ([eos_id] if eos_id else []))
+        return self._stop_ids
+
+    def _copy_kv(self, kv):
+        new_kv = copy.copy(kv)
+        new_kv.layers = []
+        for layer in kv.layers:
+            new_layer = copy.copy(layer)
+            if layer.is_initialized:
+                new_layer.keys = layer.keys.clone()
+                new_layer.values = layer.values.clone()
+            new_kv.layers.append(new_layer)
+        return new_kv
+
+    def get_field_first_token(self, prefix_kv, stub_ids, prefix_length, branch_lengths):
+        device = self.model.device
+        field_kv = self._copy_kv(prefix_kv)
+        stub_tensor = torch.tensor([stub_ids], dtype=torch.long, device=device)
+        stub_pos = torch.arange(
+            prefix_length, prefix_length + len(stub_ids), dtype=torch.long, device=device
+        ).unsqueeze(0)
+        with torch.no_grad():
+            out = self.model(
+                input_ids=stub_tensor,
+                position_ids=stub_pos,
+                past_key_values=field_kv,
                 use_cache=True,
             )
+        token = out.logits[0, -1].argmax(-1).item()
+        if token in self._get_stop_token_ids():
+            return None, out.past_key_values
+        return token, out.past_key_values
 
-        return outputs.logits, outputs.past_key_values
-    
+    def get_fields_first_tokens_batched(self, prefix_kv, fields_and_stubs, prefix_length):
+        results = {}
+        for v, stub_ids in fields_and_stubs.items():
+            results[v] = self.get_field_first_token(prefix_kv, stub_ids, prefix_length, [])
+        return results
+
+    def decode_next_token(self, token_id, position, field_kv):
+        device = self.model.device
+        tok = torch.tensor([[token_id]], dtype=torch.long, device=device)
+        pos = torch.tensor([[position]], dtype=torch.long, device=device)
+        with torch.no_grad():
+            out = self.model(
+                input_ids=tok,
+                position_ids=pos,
+                past_key_values=field_kv,
+                use_cache=True,
+            )
+        return out.logits[0, -1].argmax(-1).item(), out.past_key_values
+
     def build_ancestor_mask(self):
-        """
-        Builds the ancestor mask via transitive closure (DFS).
-        ancestor_mask[i][j] = True means field j is an ancestor of field i.
-        """
         n = len(self.DRIVELM_COT_VERTICES)
         ancestor_mask = torch.zeros(n, n, dtype=torch.bool)
 
@@ -267,16 +212,14 @@ class FastDriveVLA(QwenBaselineVLA):
                     ancestor_mask[i, j] = True
 
         return ancestor_mask
-    
+
     def generate_trajectory_parallel(self, images, text_prompt, max_new_tokens=512):
         question = text_prompt[1]["content"][-1]["text"].replace("Question: ", "")
-        full_question = question + "\n\n" + self.COT_EXAMPLE + self.COT_TEMPLATE
+        prefix_question = question + "\n\n" + self.COT_EXAMPLE + "Now describe the current scene:\n"
 
-        messages = PromptFormatter.format(full_question, images=images)
+        messages = PromptFormatter.format(prefix_question, images=images)
         formatted_prompt = self.processor.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=True
+            messages, tokenize=False, add_generation_prompt=True
         )
 
         image_inputs, video_inputs = process_vision_info(messages)
@@ -289,13 +232,20 @@ class FastDriveVLA(QwenBaselineVLA):
         ).to(self.model.device)
 
         ancestor_mask = self.build_ancestor_mask()
+        self._last_inputs = inputs
+
+        field_stub_ids = {
+            v: self.processor.tokenizer.encode(f"{v}:", add_special_tokens=False)
+            for v in self.DRIVELM_COT_VERTICES
+        }
 
         start_time = time.time()
 
         dag_scheduler = DagScheduler(
             formatted_prompt, inputs, self,
             self.DRIVELM_COT_VERTICES, self.DRIVELM_COT_EDGES,
-            self.DRIVELM_COT_MAX_LENGTHS, ancestor_mask
+            self.DRIVELM_COT_MAX_LENGTHS, ancestor_mask,
+            field_stub_ids=field_stub_ids,
         )
         generated_tokens = dag_scheduler.run_parallel_decoding()
 
@@ -306,6 +256,29 @@ class FastDriveVLA(QwenBaselineVLA):
 
         raw_text = self.processor.decode(generated_tokens, skip_special_tokens=True)
 
-        result = self._parse_output(raw_text, latency)
+        offset = 0
+        field_texts = {}
+        for v in self.DRIVELM_COT_VERTICES:
+            length = self.DRIVELM_COT_MAX_LENGTHS[v]
+            field_toks = [t for t in generated_tokens[offset:offset + length].tolist() if t != 0]
+            field_texts[v] = self.processor.decode(field_toks, skip_special_tokens=True)
+            offset += length
+
+        cot_lines = [f"{v}: {field_texts[v]}" for v in self.DRIVELM_COT_VERTICES if v != "ego_behavior_summary"]
+        ego_text = field_texts.get("ego_behavior_summary", "")
+
+        action = None
+        for candidate in ["STOP", "YIELD", "ACCELERATE", "DECELERATE", "TURN_LEFT", "TURN_RIGHT", "LANE_CHANGE"]:
+            if candidate.lower().replace("_", " ") in ego_text.lower() or candidate in ego_text.upper():
+                action = candidate
+                break
+
+        structured_text = (
+            f"<cot> {chr(10).join(cot_lines)} </cot>\n"
+            f"<action> {action or 'ACCELERATE'} </action>"
+        )
+
+        result = self._parse_output(structured_text, latency)
+        result["raw_text"] = raw_text
         result["model_type"] = "Qwen2.5VL_FastDriveCoT_Parallel"
         return result
