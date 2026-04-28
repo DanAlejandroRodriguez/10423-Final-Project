@@ -32,7 +32,7 @@ class HybridVLA(FastDriveVLA):
         super().__init__(model_id=model_id)
         self.object_threshold = object_threshold
 
-    def generate_trajectory(self, images, text_prompt, num_critical_objects=0, max_new_tokens=512):
+    def generate_trajectory_hybrid(self, images, text_prompt, num_critical_objects=0, max_new_tokens=512):
         """Route to MCTS or FastDriveCoT based on scene complexity.
 
         Parameters
