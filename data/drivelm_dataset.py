@@ -155,8 +155,8 @@ class DriveLMDataset(Dataset):
         images = self._load_images_for_token(scene_data["token"])
 
         question = "\n".join([
-            f"Q: {qa['question']}" 
-            for qa in scene_data["qas"]
+            f"Q: {qa['question']}"
+            for qa in scene_data["qas"][:3]
             if qa['question'].strip()
         ])
 
