@@ -26,23 +26,23 @@ class QwenBaselineVLA:
     def generate_trajectory(self, images, question, max_new_tokens=200):
         """
         The standard interface for all the models.
-        Accepts pre-formatted messages from PromptFormatter.format().
         Returns a dictionary containing the parsed components and latency.
         """
         driving_question = (
-            "What should the ego vehicle do next? "
-            "Be concise. Describe what you see briefly, then give the action.\n\n"
+            "What should the ego vehicle do next? Where will it go?"
+            "Be concise. Describe what you see briefly, then give the action and predicted trajectory in meters from the current position.\n"
             "Respond with:\n"
             "<cot> brief reasoning </cot>\n"
-            "<action> STOP | YIELD | ACCELERATE | DECELERATE | TURN_LEFT | TURN_RIGHT | LANE_CHANGE </action>"
+            "<action> STOP | YIELD | ACCELERATE | DECELERATE | TURN_LEFT | TURN_RIGHT | LANE_CHANGE </action>\n"
+            "<trajectory> [[x,y], ...] </trajectory>\n"
         )
         messages = PromptFormatter.format(question=driving_question, images=images)
 
         text = self.processor.apply_chat_template(
-            text_prompt, tokenize=False, add_generation_prompt=True
+            messages, tokenize=False, add_generation_prompt=True
         )
 
-        image_inputs, video_inputs = process_vision_info(text_prompt)
+        image_inputs, video_inputs = process_vision_info(messages)
         inputs = self.processor(
             text=[text],
             images=image_inputs if image_inputs else None,
