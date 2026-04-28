@@ -16,7 +16,7 @@ from evaluation.metrics import _print_summary
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--limit", type=int, default=None, help="Limit number of samples to evaluate")
-    parser.add_argument("--model", type=int, choices=[0, 1, 2], default=0,
+    parser.add_argument("--model", type=int, choices=[0, 1, 2, 3], default=0,
                         help="0: Baseline, 1: MCTS Baseline, 2: FastDriveCoT")
     args = parser.parse_args()
 
@@ -43,21 +43,29 @@ def main():
 
     for i in range(n_samples):
         print(f"\n--- Evaluating sample {i+1}/{n_samples} ---")
-        sample = dataset[i]
+        try:
+            sample = dataset[i]
+        except (OSError, IOError) as e:
+            print(f"  ✗ Skipping sample {i+1}: I/O error loading data: {e}")
+            continue
         
         # Pre-format the prompt (shared interface for all models)
         messages = PromptFormatter.format(question=sample["question"], images=sample["images"])
         
-        if args.model == 0:
-            result = model.generate_trajectory(sample["images"], messages)
-        elif args.model == 1:
-            result = model.mcts_generate(sample["images"], messages)
-        elif args.model == 2:
-            result = model.generate_trajectory(sample["images"], messages)
-        elif args.model == 3:
-            result = model.generate_trajectory_hybrid(sample["images"], messages)
-        else:
-            raise ValueError("Invalid model choice.")
+        try:
+            if args.model == 0:
+                result = model.generate_trajectory(sample["images"], messages)
+            elif args.model == 1:
+                result = model.mcts_generate(sample["images"], messages)
+            elif args.model == 2:
+                result = model.generate_trajectory_parallel(sample["images"], messages)
+            elif args.model == 3:
+                result = model.generate_trajectory_hybrid(sample["images"], messages)
+            else:
+                raise ValueError("Invalid model choice.")
+        except Exception as e:
+            print(f"  ✗ Skipping sample {i+1}: model error: {e}")
+            continue
         
         print("\n--- MODEL GENERATION ---")
         print(result.get("raw_text", ""))

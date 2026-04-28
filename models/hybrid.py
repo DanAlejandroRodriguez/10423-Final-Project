@@ -28,7 +28,7 @@ class HybridVLA(FastDriveVLA):
         Default is 3.
     """
 
-    def __init__(self, model_id="Qwen/Qwen2.5-VL-7B-Instruct", object_threshold=3):
+    def __init__(self, model_id="Qwen/Qwen2.5-VL-7B-Instruct", object_threshold=5):
         super().__init__(model_id=model_id)
         self.object_threshold = object_threshold
 
