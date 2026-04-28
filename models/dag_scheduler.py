@@ -21,6 +21,27 @@ class DagScheduler():
             if num_edges == 0:
                 self.S.append(name)
 
+    def get_waves(self):
+        in_degree = {name: 0 for name in self.vertices}
+        for (_, b) in self.edges:
+            in_degree[b] += 1
+
+        waves = []
+        remaining = set(self.vertices)
+
+        while remaining:
+            wave = [v for v in self.vertices if v in remaining and in_degree[v] == 0]
+            if not wave:
+                break
+            waves.append(wave)
+            for v in wave:
+                remaining.remove(v)
+                for (a, b) in self.edges:
+                    if a == v and b in remaining:
+                        in_degree[b] -= 1
+
+        return waves
+
     def run_parallel_decoding(self):
         prefix_length = self.inputs["input_ids"].shape[1]
         branch_lengths = [self.max_lengths[v] for v in self.vertices]
@@ -118,3 +139,51 @@ class DagScheduler():
             toks = field_tokens[v]
             all_tokens.extend(toks + [0] * (self.max_lengths[v] - len(toks)))
         return torch.tensor(all_tokens, dtype=torch.long)
+
+    def decode_wave(self, wave_fields, seed_field_tokens, prefix_kv, prefix_length, do_sample=False, temperature=1.0):
+        stop_ids = self.model._get_stop_token_ids() if hasattr(self.model, '_get_stop_token_ids') else set()
+        wave_tokens = {v: [] for v in wave_fields}
+        wave_kv = {}
+
+        for v in wave_fields:
+            stub_ids = (self.field_stub_ids or {}).get(v, [])
+            if stub_ids:
+                first_token, stub_kv = self.model.get_field_first_token(
+                    prefix_kv, stub_ids, prefix_length, [],
+                    do_sample=do_sample, temperature=temperature,
+                )
+            else:
+                first_token, stub_kv = None, prefix_kv
+            wave_kv[v] = stub_kv
+            if first_token is not None and first_token not in stop_ids:
+                wave_tokens[v].append(first_token)
+
+        max_len = max((self.max_lengths[v] for v in wave_fields), default=1)
+        for _ in range(max_len - 1):
+            all_done = True
+            for v in wave_fields:
+                toks = wave_tokens[v]
+                if len(toks) == 0 or len(toks) >= self.max_lengths[v]:
+                    continue
+                stub_ids = (self.field_stub_ids or {}).get(v, [])
+                tok_pos = prefix_length + len(stub_ids) + len(toks) - 1
+                next_token, updated_kv = self.model.decode_next_token(
+                    toks[-1], tok_pos, wave_kv[v],
+                    do_sample=do_sample, temperature=temperature,
+                )
+                wave_kv[v] = updated_kv
+                if next_token in stop_ids:
+                    wave_tokens[v].extend([0] * (self.max_lengths[v] - len(toks)))
+                else:
+                    wave_tokens[v].append(next_token)
+                    if len(wave_tokens[v]) < self.max_lengths[v]:
+                        all_done = False
+            if all_done:
+                break
+
+        for v in wave_fields:
+            toks = wave_tokens[v]
+            if len(toks) < self.max_lengths[v]:
+                wave_tokens[v] = toks + [0] * (self.max_lengths[v] - len(toks))
+
+        return wave_tokens
