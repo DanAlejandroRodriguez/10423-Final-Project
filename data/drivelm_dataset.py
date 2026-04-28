@@ -36,9 +36,10 @@ class DriveLMDataset(Dataset):
         Initialization for loading DriveLM data.
         """
         self.img_dir = nuscenes_img_dir
-        self.nusc_version = "v1.0-mini" if "mini" in nuscenes_img_dir else "v1.0-trainval"
+        # self.nusc_version = "v1.0-mini" if "mini" in nuscenes_img_dir else "v1.0-trainval"
+        self.nusc_version = "v1.0-mini"
         
-        dataroot = os.path.dirname(nuscenes_img_dir)
+        dataroot = nuscenes_img_dir
         version_dir = os.path.join(dataroot, self.nusc_version)
         
         if not os.path.exists(os.path.join(version_dir, 'category.json')):
@@ -93,7 +94,7 @@ class DriveLMDataset(Dataset):
         self.scene_list = [s for s in self.scene_list if len(s.get("trajectory", [])) > 0]
         print(f"  → Filtered down to {len(self.scene_list)} frames that have native NuScenes trajectories.")
 
-    def _extract_trajectory(self, sample_token, future_steps=6):
+    def _extract_trajectory(self, sample_token, future_steps=13):
         """Extract future trajectories using nuScenes devkit."""
         if self.nusc is None:
             return []

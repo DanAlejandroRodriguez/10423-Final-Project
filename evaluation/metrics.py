@@ -221,6 +221,8 @@ class DriveLMEvaluator:
         model_output: Dict[str, Any],
         gt_trajectory: List[List[float]],
         gt_graph: dict,
+        question: str = "",
+        token: str = "",
     ):
         """Register a single sample's results.
 
@@ -234,22 +236,29 @@ class DriveLMEvaluator:
         gt_graph : dict
             Raw DriveLM frame-info dict (``scene_data["graph"]``), used to
             extract the ground-truth meta-action.
+        question : str
+            The question(s) posed to the model for this sample.
+        token : str
+            The nuScenes sample token for this frame.
         """
         pred_traj = model_output.get("trajectory", [])
         pred_action = model_output.get("meta_action", "")
         latency = model_output.get("latency_seconds", 0.0)
 
         gt_action = _extract_gt_action(gt_graph)
+        num_objects = len(gt_graph.get("key_object_infos", {}))
 
         self.records.append({
+            "sample_token": token,
+            "question": question,
+            "num_critical_objects": num_objects,
+            "gt_action": gt_action,
+            "pred_action": pred_action,
             "meta_action_iou": meta_action_iou(pred_action, gt_action),
             "ade_3s": ade_3s(pred_traj, gt_trajectory),
             "ade_6_4s": ade_6_4s(pred_traj, gt_trajectory),
             "cot_time_s": cot_time(latency),
-            # Keep raw data for optional per-sample analysis
             "raw_text": model_output.get("raw_text", ""),
-            "pred_action": pred_action,
-            "gt_action": gt_action,
             "pred_traj_len": len(pred_traj),
             "gt_traj_len": len(gt_trajectory),
         })
@@ -295,9 +304,13 @@ class DriveLMEvaluator:
         }
 
     def to_json(self, path: str):
-        """Dump per-sample records to a JSON file for later analysis."""
-        with open(path, "w") as f:
-            json.dump(self.records, f, indent=2, default=str)
+        """Dump per-sample records and aggregate summary to a JSON file."""
+        output = {
+            "summary": self.summarise(),
+            "samples": self.records,
+        }
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(output, f, indent=2, default=str)
 
 
 
