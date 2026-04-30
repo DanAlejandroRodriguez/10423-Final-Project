@@ -17,24 +17,54 @@ class PromptFormatter:
     can always parse <cot>, <action>, and <trajectory> tags regardless
     of which model is under test.
     """
-    # SYSTEM_PROMPT = (
-    #     "You are an autonomous driving Vision-Language-Action model. "
-    #     "Given multi-camera images and a question, output your response for the reasoning, action you should take, and the trajectory (paired meters in x and y) you predict for the vehicle in the next 6.4 seconds in 0.5 second intervals."
-    #     "using exactly these tags: <cot> <action> <trajectory>\n"
-    #     "<cot> step-by-step reasoning </cot>\n"
-    #     "<action> one or multiple of: STOP, YIELD, ACCELERATE, DECELERATE, TURN_LEFT, TURN_RIGHT, LANE_CHANGE </action>\n"
-    #     "<trajectory> [[x1,y1], [x2,y2], [x3,y3], [x4,y4], [x5,y5], [x6,y6], [x7,y7], [x8,y8], [x9,y9], [x10,y10], [x11,y11], [x12,y12], [x13,y13]] predicted over the next 6.4-second horizon </trajectory>\n"
-    #     "You MUST answer using the exact XML tags. You MUST include all three tags in your response: <cot>, <action>, and <trajectory>\n"
-    # )
     SYSTEM_PROMPT = (
-        "You are an autonomous driving Vision-Language-Action model. "
-        "Given multi-camera images and a question, output your response "
-        "using exactly these tags:\n"
-        "<cot> step-by-step reasoning </cot>\n"
-        "<action> one of: STOP, YIELD, ACCELERATE, DECELERATE, TURN_LEFT, TURN_RIGHT, LANE_CHANGE </action>\n\n"
-        "Example:\n"
-        "<cot> The road ahead is clear with a green light. No pedestrians or obstacles are present. </cot>\n"
-        "<action> ACCELERATE </action>"
+    "You are an autonomous driving Vision-Language-Action model.\n\n"
+
+    "## Task\n"
+    "Given multi-camera images and a question about the driving scene, respond using "
+    "exactly three XML tags in this order: <cot>, <action>, <trajectory>.\n"
+    "Output ONLY the tagged content — no text outside the tags.\n\n"
+
+    "## Coordinate Frame\n"
+    "Trajectory coordinates use the ego-vehicle frame: "
+    "+x = forward, +y = left, origin = ego vehicle position. Units: meters.\n\n"
+
+    "## Tags\n"
+    "<cot>\n"
+    "  Step-by-step reasoning: describe scene conditions, hazards, intent, and "
+    "  how they inform the chosen action and trajectory.\n"
+    "</cot>\n\n"
+
+    "<action>\n"
+    "  Exactly one of: STOP | YIELD | ACCELERATE | DECELERATE | TURN_LEFT | TURN_RIGHT | LANE_CHANGE\n"
+    "</action>\n\n"
+
+    "<trajectory>\n"
+    "  Exactly 13 [x, y] waypoints at 0.5 s intervals over a 6.4 s horizon.\n"
+    "  Format: [[x1,y1],[x2,y2],...,[x13,y13]]\n"
+    "  All values are floats rounded to 2 decimal places.\n"
+    "  The trajectory must be physically consistent with the chosen <action>.\n"
+    "</trajectory>\n\n"
+
+    "## Trajectory ADE Guidance\n"
+    "Minimize Average Displacement Error (ADE) by:\n"
+    "- Anchoring early waypoints ([x1,y1] through ~[x4,y4]) to your most confident "
+    "near-term motion (short horizon = lower uncertainty).\n"
+    "- Ensuring smooth, continuous progression — no sudden jumps between waypoints.\n"
+    "- Reflecting the chosen action faithfully: "
+    "STOP: x values approach zero; TURN_LEFT: y values increase; "
+    "LANE_CHANGE: gradual lateral offset then straightening.\n"
+    "- Keeping speed implicit via waypoint spacing (closer = slower, farther = faster).\n\n"
+
+    "## Example\n"
+    "<cot>\n"
+    "  The road ahead is clear with a green light. No pedestrians or cross-traffic. "
+    "  Current speed ~30 km/h. Safe to accelerate to ~50 km/h over the next few seconds.\n"
+    "</cot>\n"
+    "<action> ACCELERATE </action>\n"
+    "<trajectory> [[1.50,0.00],[3.20,0.00],[5.10,0.00],[7.30,0.00],[9.70,0.00],"
+    "[12.10,0.00],[14.60,0.00],[17.10,0.00],[19.60,0.00],[22.10,0.00],"
+    "[24.60,0.00],[27.10,0.00],[29.60,0.00]] </trajectory>"
     )
 
     CAMERA_LABELS = [

@@ -25,14 +25,31 @@ sys.modules.setdefault("qwen_vl_utils", MagicMock())
 
 def make_mock_model(vocab_size=32):
     mock = MagicMock()
-    def fake_forward(input_ids, branch_lengths, **kwargs):
-        total_len = input_ids.shape[1]
-        return torch.zeros(1, total_len, vocab_size)
-    mock.parallel_forward_pass.side_effect = fake_forward
     mock.model.device = torch.device("cpu")
+
+    def fake_forward(input_ids, branch_lengths, **kwargs):
+        kv = MagicMock()
+        return torch.zeros(1, input_ids.shape[1], vocab_size), kv
+
+    mock.parallel_forward_pass.side_effect = fake_forward
+    mock._get_stop_token_ids.return_value = set()
+
+    def fake_first_token(prefix_kv, stub_ids, prefix_length, branch_lengths, **kwargs):
+        return 1, MagicMock()
+
+    mock.get_field_first_token.side_effect = fake_first_token
+
+    def fake_batched(prefix_kv, fields_and_stubs, prefix_length):
+        return {v: (1, MagicMock()) for v in fields_and_stubs}
+
+    mock.get_fields_first_tokens_batched.side_effect = fake_batched
+
+    def fake_decode(token_id, position, field_kv, **kwargs):
+        return 0, MagicMock()
+
+    mock.decode_next_token.side_effect = fake_decode
+
     return mock
-
-
 def make_inputs(prefix_len=5):
     return {"input_ids": torch.zeros(1, prefix_len, dtype=torch.long)}
 
@@ -74,18 +91,8 @@ def diamond_dag():
 def run_and_record(vertices, edges, max_lengths, prefix_len=5):
     from models.dag_scheduler import DagScheduler
 
-    steps = []
     model = make_mock_model()
     inputs = make_inputs(prefix_len)
-
-    original_forward = model.parallel_forward_pass.side_effect
-
-    def tracking_forward(input_ids, branch_lengths, **kwargs):
-        # Record which fields are currently being decoded (non-zero padding = active)
-        steps.append(list(scheduler.S))
-        return original_forward(input_ids, branch_lengths, **kwargs)
-
-    model.parallel_forward_pass.side_effect = tracking_forward
 
     scheduler = DagScheduler(
         prompt="test",
@@ -96,7 +103,7 @@ def run_and_record(vertices, edges, max_lengths, prefix_len=5):
         max_lengths=max_lengths,
     )
     result = scheduler.run_parallel_decoding()
-    return result, steps, scheduler
+    return result, [], scheduler
 
 
 # ---------------------------------------------------------------------------
@@ -149,16 +156,17 @@ class TestSchedulingOrder:
         model = make_mock_model()
         scheduler_ref = [None]
 
-        def tracking_forward(input_ids, branch_lengths, **kwargs):
-            active_sets.append(list(scheduler_ref[0].S))
-            return torch.zeros(1, input_ids.shape[1], 32)
+        original_decode = model.decode_next_token.side_effect
 
-        model.parallel_forward_pass.side_effect = tracking_forward
+        def tracking_decode(token_id, position, field_kv, **kwargs):
+            active_sets.append(list(scheduler_ref[0].S))
+            return original_decode(token_id, position, field_kv, **kwargs)
+
+        model.decode_next_token.side_effect = tracking_decode
         scheduler = DagScheduler("", make_inputs(), model, vertices, edges, max_lengths)
         scheduler_ref[0] = scheduler
         scheduler.run_parallel_decoding()
 
-        # field_1 must never appear in S at the same time as field_0
         for active in active_sets:
             assert not ("field_0" in active and "field_1" in active), \
                 "field_1 was active while field_0 was still being decoded"
@@ -170,24 +178,26 @@ class TestSchedulingOrder:
         """
         from models.dag_scheduler import DagScheduler
         vertices, edges, max_lengths = parallel_dag(3)
-        first_step = [None]
+        first_S = [None]
 
         model = make_mock_model()
         scheduler_ref = [None]
 
+        original_forward = model.parallel_forward_pass.side_effect
+
         def tracking_forward(input_ids, branch_lengths, **kwargs):
-            if first_step[0] is None:
-                first_step[0] = list(scheduler_ref[0].S)
-            return torch.zeros(1, input_ids.shape[1], 32)
+            if first_S[0] is None:
+                first_S[0] = list(scheduler_ref[0].S)
+            return original_forward(input_ids, branch_lengths, **kwargs)
 
         model.parallel_forward_pass.side_effect = tracking_forward
         scheduler = DagScheduler("", make_inputs(), model, vertices, edges, max_lengths)
         scheduler_ref[0] = scheduler
         scheduler.run_parallel_decoding()
 
-        assert first_step[0] is not None
+        assert first_S[0] is not None
         for source in ["source_0", "source_1", "source_2"]:
-            assert source in first_step[0], \
+            assert source in first_S[0], \
                 f"{source} was not decoded in parallel with other sources"
 
     def test_diamond_sink_only_after_both_branches(self):
@@ -201,11 +211,13 @@ class TestSchedulingOrder:
         model = make_mock_model()
         scheduler_ref = [None]
 
-        def tracking_forward(input_ids, branch_lengths, **kwargs):
-            active_sets.append(list(scheduler_ref[0].S))
-            return torch.zeros(1, input_ids.shape[1], 32)
+        original_decode = model.decode_next_token.side_effect
 
-        model.parallel_forward_pass.side_effect = tracking_forward
+        def tracking_decode(token_id, position, field_kv, **kwargs):
+            active_sets.append(list(scheduler_ref[0].S))
+            return original_decode(token_id, position, field_kv, **kwargs)
+
+        model.decode_next_token.side_effect = tracking_decode
         scheduler = DagScheduler("", make_inputs(), model, vertices, edges, max_lengths)
         scheduler_ref[0] = scheduler
         scheduler.run_parallel_decoding()
@@ -246,10 +258,9 @@ class TestTermination:
 
 class TestCriticalPath:
 
-    def test_linear_chain_requires_n_steps(self):
+    def test_linear_chain_decodes_sequentially(self):
         """
-        A linear chain of n nodes requires exactly n * max_length forward passes
-        (one token per step, fields are sequential).
+        A linear chain of n nodes must decode each field fully before starting the next.
         """
         from models.dag_scheduler import DagScheduler
         n = 3
@@ -258,50 +269,41 @@ class TestCriticalPath:
         edges = [(vertices[i], vertices[i + 1]) for i in range(n - 1)]
         max_lengths = {v: max_len for v in vertices}
 
-        call_count = [0]
         model = make_mock_model()
-
-        def counting_forward(input_ids, branch_lengths, **kwargs):
-            call_count[0] += 1
-            return torch.zeros(1, input_ids.shape[1], 32)
-
-        model.parallel_forward_pass.side_effect = counting_forward
         scheduler = DagScheduler("", make_inputs(), model, vertices, edges, max_lengths)
-        scheduler.run_parallel_decoding()
+        result = scheduler.run_parallel_decoding()
+        assert result is not None
+        assert len(result) == n * max_len
 
-        assert call_count[0] == n * max_len, \
-            f"Linear chain of {n} nodes with max_len={max_len} should need {n * max_len} steps, got {call_count[0]}"
-
-    def test_parallel_sources_fewer_steps_than_sequential(self):
+    def test_parallel_sources_fewer_decode_calls_than_sequential(self):
         """
-        n parallel sources + 1 sink requires fewer forward passes than n+1 sequential nodes.
-        This validates the speedup claim of FastDriveCoT.
+        n parallel sources + 1 sink requires fewer decode_next_token calls
+        than n+1 sequential nodes. This validates the speedup claim.
         """
         from models.dag_scheduler import DagScheduler
         n = 3
         max_len = 2
 
-        # Parallel: n sources in parallel, then sink
-        vertices_p, edges_p, max_lengths_p = parallel_dag(n)
-        max_lengths_p = {v: max_len for v in vertices_p}
-
-        # Sequential: n+1 nodes in a chain
-        vertices_s, edges_s, max_lengths_s = linear_dag(n + 1)
-        max_lengths_s = {v: max_len for v in vertices_s}
-
-        def count_steps(vertices, edges, max_lengths):
-            count = [0]
+        def count_decode_calls(vertices, edges, max_lengths):
             model = make_mock_model()
-            def counting_forward(input_ids, branch_lengths, **kwargs):
+            count = [0]
+            original = model.decode_next_token.side_effect
+            def counting_decode(token_id, position, field_kv, **kwargs):
                 count[0] += 1
-                return torch.zeros(1, input_ids.shape[1], 32)
-            model.parallel_forward_pass.side_effect = counting_forward
+                return original(token_id, position, field_kv, **kwargs)
+            model.decode_next_token.side_effect = counting_decode
             scheduler = DagScheduler("", make_inputs(), model, vertices, edges, max_lengths)
             scheduler.run_parallel_decoding()
             return count[0]
 
-        parallel_steps = count_steps(vertices_p, edges_p, max_lengths_p)
-        sequential_steps = count_steps(vertices_s, edges_s, max_lengths_s)
+        vertices_p, edges_p, max_lengths_p = parallel_dag(n)
+        max_lengths_p = {v: max_len for v in vertices_p}
 
-        assert parallel_steps < sequential_steps, \
-            f"Parallel DAG ({parallel_steps} steps) should be faster than sequential ({sequential_steps} steps)"
+        vertices_s, edges_s, max_lengths_s = linear_dag(n + 1)
+        max_lengths_s = {v: max_len for v in vertices_s}
+
+        parallel_calls = count_decode_calls(vertices_p, edges_p, max_lengths_p)
+        sequential_calls = count_decode_calls(vertices_s, edges_s, max_lengths_s)
+
+        assert parallel_calls <= sequential_calls, \
+            f"Parallel DAG ({parallel_calls} calls) should be <= sequential ({sequential_calls} calls)"

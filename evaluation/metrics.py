@@ -32,8 +32,7 @@ _KEYFRAME_DT = 0.5  # seconds
 
 # Waypoint counts for the two ADE horizons
 _STEPS_3S = int(3.0 / _KEYFRAME_DT)      # 6
-_STEPS_6_4S = int(6.4 / _KEYFRAME_DT)    # 12  (6.0 s), ceil → 13 for 6.5 s
-_STEPS_6_4S = 13  # Use 13 to approximate 6.4 s (13 × 0.5 = 6.5 s ≈ 6.4 s)
+_STEPS_6_4S = 13                          # 13 × 0.5 = 6.5 s ≈ 6.4 s
 
 # Canonical action vocabulary (matches PromptFormatter.SYSTEM_PROMPT)
 VALID_ACTIONS = {
@@ -221,6 +220,8 @@ class DriveLMEvaluator:
         model_output: Dict[str, Any],
         gt_trajectory: List[List[float]],
         gt_graph: dict,
+        question: str = "",
+        token: str = "",
     ):
         """Register a single sample's results.
 
@@ -234,22 +235,29 @@ class DriveLMEvaluator:
         gt_graph : dict
             Raw DriveLM frame-info dict (``scene_data["graph"]``), used to
             extract the ground-truth meta-action.
+        question : str
+            The question(s) posed to the model for this sample.
+        token : str
+            The nuScenes sample token for this frame.
         """
         pred_traj = model_output.get("trajectory", [])
         pred_action = model_output.get("meta_action", "")
         latency = model_output.get("latency_seconds", 0.0)
 
         gt_action = _extract_gt_action(gt_graph)
+        num_objects = len(gt_graph.get("key_object_infos", {}))
 
         self.records.append({
+            "sample_token": token,
+            "question": question,
+            "num_critical_objects": num_objects,
+            "gt_action": gt_action,
+            "pred_action": pred_action,
             "meta_action_iou": meta_action_iou(pred_action, gt_action),
             "ade_3s": ade_3s(pred_traj, gt_trajectory),
             "ade_6_4s": ade_6_4s(pred_traj, gt_trajectory),
             "cot_time_s": cot_time(latency),
-            # Keep raw data for optional per-sample analysis
             "raw_text": model_output.get("raw_text", ""),
-            "pred_action": pred_action,
-            "gt_action": gt_action,
             "pred_traj_len": len(pred_traj),
             "gt_traj_len": len(gt_trajectory),
         })
@@ -295,9 +303,13 @@ class DriveLMEvaluator:
         }
 
     def to_json(self, path: str):
-        """Dump per-sample records to a JSON file for later analysis."""
-        with open(path, "w") as f:
-            json.dump(self.records, f, indent=2, default=str)
+        """Dump per-sample records and aggregate summary to a JSON file."""
+        output = {
+            "summary": self.summarise(),
+            "samples": self.records,
+        }
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(output, f, indent=2, default=str)
 
 
 
@@ -335,61 +347,8 @@ def main():
         evaluator.records = records
         summary = evaluator.summarise()
         _print_summary(summary)
-    # else:
-    #     # sanity check with synthetic data
-    #     print("Running sanity check with synthetic data…")
-
-    #     pred_traj = [[1.0, 0.5], [2.1, 1.0], [3.0, 1.5],
-    #                  [4.2, 2.0], [5.0, 2.5], [6.1, 3.0]]
-    #     gt_traj =   [[1.0, 0.5], [2.0, 1.0], [3.0, 1.5],
-    #                  [4.0, 2.0], [5.0, 2.5], [6.0, 3.0]]
-
-    #     evaluator = DriveLMEvaluator()
-
-    #     # Simulate model output
-    #     model_output = {
-    #         "meta_action": "ACCELERATE",
-    #         "trajectory": pred_traj,
-    #         "latency_seconds": 1.23,
-    #     }
-    #     gt_graph = {
-    #         "QA": {
-    #             "behavior": [
-    #                 {"Q": "What should the ego car do?",
-    #                  "A": "ACCELERATE, TURN_LEFT"}
-    #             ]
-    #         }
-    #     }
-
-    #     evaluator.add(model_output, gt_traj, gt_graph)
-
-    #     # Second sample — exact match
-    #     model_output_2 = {
-    #         "meta_action": "STOP",
-    #         "trajectory": gt_traj,
-    #         "latency_seconds": 0.87,
-    #     }
-    #     gt_graph_2 = {
-    #         "QA": {
-    #             "behavior": [
-    #                 {"Q": "What should the ego car do?",
-    #                  "A": "STOP"}
-    #             ]
-    #         }
-    #     }
-    #     evaluator.add(model_output_2, gt_traj, gt_graph_2)
-
-    #     summary = evaluator.summarise()
-    #     _print_summary(summary)
-
-    #     # Verify individual metric functions
-    #     print("Individual metric checks:")
-    #     print(f"  meta_action_iou('ACCELERATE', 'ACCELERATE, TURN_LEFT') "
-    #           f"= {meta_action_iou('ACCELERATE', 'ACCELERATE, TURN_LEFT'):.4f}")
-    #     print(f"  meta_action_iou('STOP', 'STOP') "
-    #           f"= {meta_action_iou('STOP', 'STOP'):.4f}")
-    #     print(f"  ade_3s(pred, gt) = {ade_3s(pred_traj, gt_traj):.4f} m")
-    #     print(f"  ade_6_4s(pred, gt) = {ade_6_4s(pred_traj, gt_traj):.4f} m")
+    else:
+        print("Usage: python -m evaluation.metrics --results results.json")
 
 
 if __name__ == "__main__":

@@ -27,7 +27,16 @@ class QwenBaselineVLA:
         The standard interface for all the models.
         Returns a dictionary containing the parsed components and latency.
         """
-        messages = PromptFormatter.format(question=question, images=images)
+        driving_question = (
+            "What should the ego vehicle do next? "
+            "Describe what you see briefly, then give the action and predicted trajectory.\n\n"
+            "Respond with:\n"
+            "<cot> brief reasoning </cot>\n"
+            "<action> STOP | YIELD | ACCELERATE | DECELERATE | TURN_LEFT | TURN_RIGHT | LANE_CHANGE </action>\n"
+            "<trajectory> [[x1,y1],[x2,y2],...,[x13,y13]] </trajectory>\n\n"
+            f"Question: {question}"
+        )
+        messages = PromptFormatter.format(question=driving_question, images=images)
 
         text = self.processor.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=True
@@ -69,7 +78,6 @@ class QwenBaselineVLA:
         Returns the action with the highest number of visits.
         """
         root = MCTSNode(state=inputs)
-        prefix_length = inputs["input_ids"].shape[1]
 
         with torch.no_grad():
             prefix_out = self.model(**inputs, use_cache=True)
@@ -83,20 +91,8 @@ class QwenBaselineVLA:
 
             start_time = time.time()
 
-            node_new_ids = node.state["input_ids"][:, prefix_length:].to(self.model.device)
-            if node_new_ids.shape[1] > 0:
-                with torch.no_grad():
-                    node_kv = self.model(
-                        input_ids=node_new_ids,
-                        past_key_values=prefix_kv,
-                        use_cache=True,
-                    ).past_key_values
-            else:
-                node_kv = prefix_kv
-
             actions = self.model.generate(
-                input_ids=torch.zeros(1, 1, dtype=torch.long, device=self.model.device),
-                past_key_values=node_kv,
+                **node.state,
                 do_sample=True,
                 temperature=0.7,
                 top_p=0.9,
@@ -152,17 +148,35 @@ class QwenBaselineVLA:
 
     def _parse_output(self, raw_text, latency):
         """Extracts the specific tags for evaluation."""
-        cot_match = re.search(r'<cot>(.*?)</cot>', raw_text, re.DOTALL)
-        action_match = re.search(r'<action>(.*?)</action>', raw_text, re.DOTALL)
-        traj_match = re.search(r'<trajectory>(.*?)</trajectory>', raw_text, re.DOTALL)
+        text = raw_text
+        for bad in ("</response>", "</answer>", "</lemma>", "</res>", "</election>", "</episode>"):
+            text = text.replace(bad, "</action>")
+        text = re.sub(r'</the\b[^>]*>', '</action>', text)
+        # catch truncated <action>XX without closing tag — grab the action word directly
+        action_match = re.search(r'<action>\s*(.*?)\s*</action>', text, re.DOTALL)
+        if not action_match:
+            action_match = re.search(
+                r'<action>\s*(STOP|YIELD|ACCELERATE|DECELERATE|TURN_LEFT|TURN_RIGHT|LANE_CHANGE)',
+                text, re.IGNORECASE
+            )
+        cot_match = re.search(r'<cot>(.*?)</cot>', text, re.DOTALL)
+        traj_match = re.search(r'<trajectory>(.*?)</trajectory>', text, re.DOTALL)
         
+        cot_text = cot_match.group(1).strip() if cot_match else None
+        if cot_text and cot_text.lower() in ("brief reasoning", "step-by-step reasoning"):
+            cot_text = None
+
+        traj = self._parse_coordinates(traj_match.group(1)) if traj_match else []
+        if traj_match and ("x1" in traj_match.group(1) or "x13" in traj_match.group(1)):
+            traj = []
+
         return {
             "model_type": "Qwen2.5VL_Autoregressive_Baseline",
             "latency_seconds": latency,
             "raw_text": raw_text,
-            "chain_of_thought": cot_match.group(1).strip() if cot_match else None,
+            "chain_of_thought": cot_text,
             "meta_action": action_match.group(1).strip() if action_match else None,
-            "trajectory": self._parse_coordinates(traj_match.group(1)) if traj_match else []
+            "trajectory": traj
         }
         
     def _parse_coordinates(self, traj_string):
