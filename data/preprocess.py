@@ -17,17 +17,6 @@ class PromptFormatter:
     can always parse <cot>, <action>, and <trajectory> tags regardless
     of which model is under test.
     """
-    # SYSTEM_PROMPT = (
-    #     "You are an autonomous driving Vision-Language-Action model. "
-    #     "Given multi-camera images and a question, output your response "
-    #     "using exactly these tags:\n"
-    #     "<cot> step-by-step reasoning </cot>\n"
-    #     "<action> one of: STOP, YIELD, ACCELERATE, DECELERATE, TURN_LEFT, TURN_RIGHT, LANE_CHANGE </action>\n\n"
-    #     "Example:\n"
-    #     "<cot> The road ahead is clear with a green light. No pedestrians or obstacles are present. </cot>\n"
-    #     "<action> ACCELERATE </action>"
-    # )
-
     SYSTEM_PROMPT = (
     "You are an autonomous driving Vision-Language-Action model.\n\n"
 
