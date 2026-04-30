@@ -12,11 +12,12 @@ import argparse
 from data.drivelm_dataset import DriveLMDataset
 from data.preprocess import PromptFormatter
 from models.fastdrive import FastDriveVLA
+from models.hybrid import HybridVLA
 from evaluation import DriveLMEvaluator
 from evaluation.metrics import _print_summary
 
-MODEL_NAMES = {0: "Baseline (AR)", 1: "FastDriveCoT", 2: "MCTS"}
-RESULT_KEYS = {0: "baseline_ar_", 1: "fastdrivecot_", 2: "mcts_k{k}_"}
+MODEL_NAMES = {0: "Baseline (AR)", 1: "FastDriveCoT", 2: "MCTS", 3: "Hybrid"}
+RESULT_KEYS = {0: "baseline_ar_", 1: "fastdrivecot_", 2: "mcts_k{k}_", 3: "hybrid_"}
 
 
 def find_real_frames(dataset, nuscenes_root, limit=None):
@@ -42,20 +43,29 @@ def run_model(model, sample, model_id, mcts_iterations):
     prompt = PromptFormatter.format(question, images=images)
     if model_id == 1:
         return model.generate_trajectory_parallel(images=images, text_prompt=prompt)
-    return model.mcts_fastdrive_generate(images=images, text_prompt=prompt, iterations=mcts_iterations)
+    if model_id == 2:
+        return model.mcts_fastdrive_generate(images=images, text_prompt=prompt, iterations=mcts_iterations)
+    num_objects = len(sample["answer"].get("key_object_infos", {}))
+    return model.generate_trajectory_hybrid(
+        images=images, text_prompt=prompt,
+        num_critical_objects=num_objects, mcts_iterations=mcts_iterations,
+    )
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", type=int, default=0, choices=[0, 1, 2],
-                        help="0=baseline  1=fastdrive  2=mcts")
+    parser.add_argument("--model", type=int, default=0, choices=[0, 1, 2, 3],
+                        help="0=baseline  1=fastdrive  2=mcts  3=hybrid")
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--nuscenes_root", type=str, default="/content/nuscenes/samples")
     parser.add_argument("--mcts_iterations", type=int, default=5)
     args = parser.parse_args()
 
     dataset = DriveLMDataset(split="train", nuscenes_img_dir=args.nuscenes_root)
-    model = FastDriveVLA(model_id="Qwen/Qwen2.5-VL-7B-Instruct")
+    if args.model == 3:
+        model = HybridVLA(model_id="Qwen/Qwen2.5-VL-7B-Instruct")
+    else:
+        model = FastDriveVLA(model_id="Qwen/Qwen2.5-VL-7B-Instruct")
 
     real_indices = find_real_frames(dataset, args.nuscenes_root, args.limit)
     n = len(real_indices)
@@ -71,7 +81,8 @@ def main():
               f"latency={result.get('latency_seconds', 0):.1f}s  "
               f"traj_pts={len(result.get('trajectory', []))}")
 
-        evaluator.add(result, sample["gt_trajectory"], sample["answer"])
+        evaluator.add(result, sample["gt_trajectory"], sample["answer"],
+                      question=sample["question"], token=sample["token"])
 
     _print_summary(evaluator.summarise())
     key = RESULT_KEYS[args.model].format(k=args.mcts_iterations)

@@ -1,5 +1,4 @@
 import math
-import copy
 
 
 class MCTSNode:
