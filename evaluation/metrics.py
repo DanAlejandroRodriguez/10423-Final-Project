@@ -32,8 +32,7 @@ _KEYFRAME_DT = 0.5  # seconds
 
 # Waypoint counts for the two ADE horizons
 _STEPS_3S = int(3.0 / _KEYFRAME_DT)      # 6
-_STEPS_6_4S = int(6.4 / _KEYFRAME_DT)    # 12  (6.0 s), ceil → 13 for 6.5 s
-_STEPS_6_4S = 13  # Use 13 to approximate 6.4 s (13 × 0.5 = 6.5 s ≈ 6.4 s)
+_STEPS_6_4S = 13                          # 13 × 0.5 = 6.5 s ≈ 6.4 s
 
 # Canonical action vocabulary (matches PromptFormatter.SYSTEM_PROMPT)
 VALID_ACTIONS = {
@@ -348,61 +347,8 @@ def main():
         evaluator.records = records
         summary = evaluator.summarise()
         _print_summary(summary)
-    # else:
-    #     # sanity check with synthetic data
-    #     print("Running sanity check with synthetic data…")
-
-    #     pred_traj = [[1.0, 0.5], [2.1, 1.0], [3.0, 1.5],
-    #                  [4.2, 2.0], [5.0, 2.5], [6.1, 3.0]]
-    #     gt_traj =   [[1.0, 0.5], [2.0, 1.0], [3.0, 1.5],
-    #                  [4.0, 2.0], [5.0, 2.5], [6.0, 3.0]]
-
-    #     evaluator = DriveLMEvaluator()
-
-    #     # Simulate model output
-    #     model_output = {
-    #         "meta_action": "ACCELERATE",
-    #         "trajectory": pred_traj,
-    #         "latency_seconds": 1.23,
-    #     }
-    #     gt_graph = {
-    #         "QA": {
-    #             "behavior": [
-    #                 {"Q": "What should the ego car do?",
-    #                  "A": "ACCELERATE, TURN_LEFT"}
-    #             ]
-    #         }
-    #     }
-
-    #     evaluator.add(model_output, gt_traj, gt_graph)
-
-    #     # Second sample — exact match
-    #     model_output_2 = {
-    #         "meta_action": "STOP",
-    #         "trajectory": gt_traj,
-    #         "latency_seconds": 0.87,
-    #     }
-    #     gt_graph_2 = {
-    #         "QA": {
-    #             "behavior": [
-    #                 {"Q": "What should the ego car do?",
-    #                  "A": "STOP"}
-    #             ]
-    #         }
-    #     }
-    #     evaluator.add(model_output_2, gt_traj, gt_graph_2)
-
-    #     summary = evaluator.summarise()
-    #     _print_summary(summary)
-
-    #     # Verify individual metric functions
-    #     print("Individual metric checks:")
-    #     print(f"  meta_action_iou('ACCELERATE', 'ACCELERATE, TURN_LEFT') "
-    #           f"= {meta_action_iou('ACCELERATE', 'ACCELERATE, TURN_LEFT'):.4f}")
-    #     print(f"  meta_action_iou('STOP', 'STOP') "
-    #           f"= {meta_action_iou('STOP', 'STOP'):.4f}")
-    #     print(f"  ade_3s(pred, gt) = {ade_3s(pred_traj, gt_traj):.4f} m")
-    #     print(f"  ade_6_4s(pred, gt) = {ade_6_4s(pred_traj, gt_traj):.4f} m")
+    else:
+        print("Usage: python -m evaluation.metrics --results results.json")
 
 
 if __name__ == "__main__":

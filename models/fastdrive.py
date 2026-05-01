@@ -1,7 +1,6 @@
 import copy
 import torch
 import time
-import re
 import torch.nn.functional as F
 from qwen_vl_utils import process_vision_info
 from .baseline import QwenBaselineVLA
@@ -19,7 +18,7 @@ class FastDriveVLA(QwenBaselineVLA):
         "critical_objects_enumeration",
         "critical_object_0", "critical_object_1", "critical_object_2", "critical_object_3",
         "traffic_regulation_summary", "non_interactive_summary",
-        "interactive_summary", "ego_behavior_summary",
+        "interactive_summary", "ego_behavior_summary", "trajectory",
     ]
 
     DRIVELM_COT_EDGES = [
@@ -43,46 +42,73 @@ class FastDriveVLA(QwenBaselineVLA):
         ("critical_object_3", "interactive_summary"),
         ("non_interactive_summary", "ego_behavior_summary"),
         ("interactive_summary", "ego_behavior_summary"),
+        ("ego_behavior_summary", "trajectory"),
     ]
 
     DRIVELM_COT_MAX_LENGTHS = {
-        "lighting": 8, "road_condition": 10, "weather": 8,
-        "junction_type": 12, "road_type": 10,
-        "traffic_light": 8, "traffic_sign": 10,
-        "lanes_enumeration": 12,
-        "lane_detail_0": 20, "lane_detail_1": 20, "lane_detail_2": 20,
-        "critical_objects_enumeration": 15,
-        "critical_object_0": 25, "critical_object_1": 25,
-        "critical_object_2": 25, "critical_object_3": 25,
-        "traffic_regulation_summary": 20,
-        "non_interactive_summary": 25, "interactive_summary": 25,
-        "ego_behavior_summary": 30,
+        "lighting": 6, "road_condition": 8, "weather": 6,
+        "junction_type": 8, "road_type": 8,
+        "traffic_light": 6, "traffic_sign": 8,
+        "lanes_enumeration": 10,
+        "lane_detail_0": 15, "lane_detail_1": 15, "lane_detail_2": 15,
+        "critical_objects_enumeration": 12,
+        "critical_object_0": 20, "critical_object_1": 20,
+        "critical_object_2": 20, "critical_object_3": 20,
+        "traffic_regulation_summary": 15,
+        "non_interactive_summary": 20, "interactive_summary": 20,
+        "ego_behavior_summary": 25, "trajectory": 120,
     }
 
     COT_EXAMPLE = (
-        "Complete each field with a short phrase describing ONLY what you observe in the images.\n"
-        "Rules:\n"
-        "- lighting: always describe the ambient light (e.g. bright daylight, overcast, night)\n"
-        "- road_condition: always describe the road surface (e.g. dry, wet, clear)\n"
-        "- weather: always describe the sky/weather (e.g. clear, cloudy, rainy)\n"
-        "- junction_type: describe the intersection type visible ahead (e.g. signalized intersection, "
-        "T-junction, roundabout, straight road). Use your visual observation, not a default.\n"
-        "- Use N/A only for lane_detail_1, lane_detail_2, critical_object_1/2/3 when those "
-        "lanes or objects are not present.\n"
-        "- ego_behavior_summary: end with exactly one of: "
-        "ACCELERATE, DECELERATE, STOP, YIELD, TURN_LEFT, TURN_RIGHT, LANE_CHANGE\n\n"
+        "Fill in each field with a short phrase describing what you observe.\n\n"
+        "Example 1:\n"
+        "lighting: bright daylight\n"
+        "road_condition: dry asphalt\n"
+        "weather: clear sky\n"
+        "junction_type: T-intersection\n"
+        "road_type: urban road\n"
+        "traffic_light: green\n"
+        "traffic_sign: speed limit sign\n"
+        "lanes_enumeration: two lanes\n"
+        "lane_detail_0: ego lane clear\n"
+        "lane_detail_1: adjacent lane occupied\n"
+        "lane_detail_2: N/A\n"
+        "critical_objects_enumeration: one car\n"
+        "critical_object_0: car ahead moving slowly\n"
+        "critical_object_1: N/A\n"
+        "critical_object_2: N/A\n"
+        "critical_object_3: N/A\n"
+        "traffic_regulation_summary: green light, proceed\n"
+        "non_interactive_summary: road ahead is clear\n"
+        "interactive_summary: slow car requires attention\n"
+        "ego_behavior_summary: ACCELERATE, maintain speed\n"
+        "trajectory: [[1.0,0.0],[2.1,0.0],[3.3,0.1],[4.6,0.1],[6.0,0.2],[7.5,0.2],[9.1,0.3],[10.8,0.3],[12.6,0.4],[14.5,0.4],[16.5,0.5],[18.6,0.5],[20.8,0.6]]\n\n"
+        "Example 2:\n"
+        "lighting: night, street lamps on\n"
+        "road_condition: wet surface\n"
+        "weather: rainy\n"
+        "junction_type: signalized intersection\n"
+        "road_type: urban road\n"
+        "traffic_light: red\n"
+        "traffic_sign: stop sign\n"
+        "lanes_enumeration: one lane\n"
+        "lane_detail_0: blocked by red light\n"
+        "lane_detail_1: N/A\n"
+        "lane_detail_2: N/A\n"
+        "critical_objects_enumeration: pedestrians\n"
+        "critical_object_0: pedestrian crossing\n"
+        "critical_object_1: N/A\n"
+        "critical_object_2: N/A\n"
+        "critical_object_3: N/A\n"
+        "traffic_regulation_summary: red light, must stop\n"
+        "non_interactive_summary: intersection blocked\n"
+        "interactive_summary: pedestrians crossing ahead\n"
+        "ego_behavior_summary: STOP, wait for green\n"
+        "trajectory: [[0.1,0.0],[0.1,0.0],[0.1,0.0],[0.1,0.0],[0.1,0.0],[0.1,0.0],[0.0,0.0],[0.0,0.0],[0.0,0.0],[0.0,0.0],[0.0,0.0],[0.0,0.0],[0.0,0.0]]\n\n"
     )
 
     def __init__(self, model_id="Qwen/Qwen2.5-VL-7B-Instruct"):
         super().__init__(model_id=model_id, attn_implementation="eager")
-
-    def build_dag_position_ids(self, prefix_length, branch_lengths):
-        prefix_pos = torch.arange(prefix_length)
-        branch_pos = torch.cat([
-            torch.arange(prefix_length, prefix_length + blen)
-            for blen in branch_lengths
-        ])
-        return torch.cat([prefix_pos, branch_pos]).unsqueeze(0)
 
     def parallel_forward_pass(self, input_ids, branch_lengths, ancestor_mask=None, padding_lengths=None, position_ids=None, past_key_values=None, new_token_positions=None):
         device = self.model.device
@@ -196,7 +222,7 @@ class FastDriveVLA(QwenBaselineVLA):
 
         return ancestor_mask
 
-    def generate_trajectory_parallel(self, images, text_prompt, max_new_tokens=512):
+    def generate_trajectory_parallel(self, images, text_prompt):
         question = text_prompt[1]["content"][-1]["text"].replace("Question: ", "")
         prefix_question = question + "\n\n" + self.COT_EXAMPLE + "Now describe the current scene:\n"
 
@@ -249,8 +275,10 @@ class FastDriveVLA(QwenBaselineVLA):
             field_texts[v] = self.processor.decode(field_toks, skip_special_tokens=True)
             offset += length
 
-        cot_lines = [f"{v}: {field_texts[v]}" for v in self.DRIVELM_COT_VERTICES if v != "ego_behavior_summary"]
+        cot_lines = [f"{v}: {field_texts[v]}" for v in self.DRIVELM_COT_VERTICES
+                     if v not in ("ego_behavior_summary", "trajectory")]
         ego_text = field_texts.get("ego_behavior_summary", "")
+        traj_text = field_texts.get("trajectory", "")
 
         action = None
         for candidate in ["STOP", "YIELD", "ACCELERATE", "DECELERATE", "TURN_LEFT", "TURN_RIGHT", "LANE_CHANGE"]:
@@ -259,7 +287,8 @@ class FastDriveVLA(QwenBaselineVLA):
                 break
 
         cot_block = f"<cot> {chr(10).join(cot_lines)} </cot>"
-        structured_text = f"{cot_block}\n<action> {action} </action>" if action else cot_block
+        traj_block = f"<trajectory> {traj_text} </trajectory>"
+        structured_text = f"{cot_block}\n<action> {action} </action>\n{traj_block}" if action else f"{cot_block}\n{traj_block}"
 
         result = self._parse_output(structured_text, latency)
         result["raw_text"] = raw_text
@@ -274,20 +303,15 @@ class FastDriveVLA(QwenBaselineVLA):
         branches_per_wave=3,
         temperature=0.8,
         explor_const=1.0,
+        latency_weight=0.1,
     ):
         """
-        MCTS over DAG wave completions (FastDriveCoT-MCTS).
+        MCTSr over DAG wave completions (FastDriveCoT-MCTS with self-refinement).
 
-        Instead of searching over raw token sequences, the tree branches at
-        the *wave* level of the CoT DAG.  Each node holds a partially-decoded
-        CoT (some waves filled, some pending).  Expansion runs one parallel
-        forward pass per wave (FastDriveCoT's strength) with temperature
-        sampling to produce diverse branches.  Leaf nodes are scored with
-        self_evaluate_state and the score is backpropagated.
-
-        Tree depth  = number of DAG waves (~5-6 for the DriveLM DAG).
-        Branching   = branches_per_wave sampled completions per expansion.
-        Cost        = iterations × (waves × parallel passes + 1 eval call).
+        Branches at the wave level. After expanding children via sampling,
+        the best-scoring child is refined: its wave output is fed back as
+        context and re-decoded to produce an improved completion (MCTSr
+        self-refine step). Reward = verifier_score - latency_weight * latency.
         """
         question = text_prompt[1]["content"][-1]["text"].replace("Question: ", "")
         prefix_question = question + "\n\n" + self.COT_EXAMPLE + "Now describe the current scene:\n"
@@ -347,11 +371,16 @@ class FastDriveVLA(QwenBaselineVLA):
                 node = max(node.children, key=lambda c: c.ucb_score(root.visits + 1, explor_const))
 
             if node.is_terminal(waves):
-                reward = self._evaluate_dag_node(node, inputs)
+                iter_start = time.time()
+                verifier_score = self._evaluate_dag_node(node, inputs)
+                iter_latency = time.time() - iter_start
+                reward = verifier_score - latency_weight * iter_latency
                 self._backprop(node, reward)
                 continue
 
             wave_fields = waves[node.wave_index]
+            iter_start = time.time()
+
             for _ in range(branches_per_wave):
                 child_tokens = node.clone_tokens()
                 wave_result = scheduler.decode_wave(
@@ -370,7 +399,28 @@ class FastDriveVLA(QwenBaselineVLA):
                 )
                 node.children.append(child)
 
-            sim_node = node.children[0]
+            best_child = max(
+                node.children[-branches_per_wave:],
+                key=lambda c: self._evaluate_dag_node(c, inputs),
+            )
+            refined_tokens = best_child.clone_tokens()
+            refined_wave = scheduler.decode_wave(
+                wave_fields,
+                seed_field_tokens=refined_tokens,
+                prefix_kv=prefix_kv,
+                prefix_length=prefix_length,
+                do_sample=True,
+                temperature=max(temperature * 0.5, 0.3),
+            )
+            refined_tokens.update(refined_wave)
+            refined_child = DagMCTSNode(
+                field_tokens=refined_tokens,
+                wave_index=node.wave_index + 1,
+                parent=node,
+            )
+            node.children.append(refined_child)
+
+            sim_node = refined_child
             sim_tokens = sim_node.clone_tokens()
             for future_wave in waves[sim_node.wave_index:]:
                 wave_result = scheduler.decode_wave(
@@ -383,7 +433,9 @@ class FastDriveVLA(QwenBaselineVLA):
                 sim_tokens.update(wave_result)
 
             terminal = DagMCTSNode(field_tokens=sim_tokens, wave_index=len(waves))
-            reward = self._evaluate_dag_node(terminal, inputs)
+            verifier_score = self._evaluate_dag_node(terminal, inputs)
+            iter_latency = time.time() - iter_start
+            reward = verifier_score - latency_weight * iter_latency
             self._backprop(sim_node, reward)
 
         if torch.cuda.is_available():
@@ -405,7 +457,7 @@ class FastDriveVLA(QwenBaselineVLA):
 
         cot_lines = []
         for v in self.DRIVELM_COT_VERTICES:
-            if v == "ego_behavior_summary":
+            if v in ("ego_behavior_summary", "trajectory"):
                 continue
             toks = [t for t in best_tokens.get(v, []) if t != 0]
             text = self.processor.decode(toks, skip_special_tokens=True) if toks else ""
@@ -414,6 +466,9 @@ class FastDriveVLA(QwenBaselineVLA):
         ego_toks = [t for t in best_tokens.get("ego_behavior_summary", []) if t != 0]
         ego_text = self.processor.decode(ego_toks, skip_special_tokens=True) if ego_toks else ""
 
+        traj_toks = [t for t in best_tokens.get("trajectory", []) if t != 0]
+        traj_text = self.processor.decode(traj_toks, skip_special_tokens=True) if traj_toks else ""
+
         action = None
         for candidate in ["STOP", "YIELD", "ACCELERATE", "DECELERATE", "TURN_LEFT", "TURN_RIGHT", "LANE_CHANGE"]:
             if candidate.lower().replace("_", " ") in ego_text.lower() or candidate in ego_text.upper():
@@ -421,7 +476,8 @@ class FastDriveVLA(QwenBaselineVLA):
                 break
 
         cot_block = f"<cot> {chr(10).join(cot_lines)} </cot>"
-        structured_text = f"{cot_block}\n<action> {action} </action>" if action else cot_block
+        traj_block = f"<trajectory> {traj_text} </trajectory>"
+        structured_text = f"{cot_block}\n<action> {action} </action>\n{traj_block}" if action else f"{cot_block}\n{traj_block}"
 
         result = self._parse_output(structured_text, latency)
         result["model_type"] = "Qwen2.5VL_FastDriveCoT_MCTS"

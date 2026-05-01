@@ -76,19 +76,30 @@ Lucy will take responsibility in data processing the DriveLM dataset pipeline an
 
 ```
 10423-Final-Project/
-├── README.md               ← this file
-├── requirements.txt        ← Python dependencies
-├── data/                   ← DriveLM data pipeline
+├── README.md                  ← this file
+├── requirements.txt           ← Python dependencies
+├── main.py                    ← Evaluation pipeline (--model 0/1/2/3)
+├── data/
 │   ├── __init__.py
-│   ├── drivelm_dataset.py  ← Dataset loader (DriveLM / nuScenes)
-│   ├── preprocess.py       ← Feature extraction & tokenisation helpers
-│   └── README.md           ← Data setup instructions
-├── models/                 ← Model components (to be implemented)
-│   └── __init__.py
-├── search/                 ← MCTS and adaptive-compute routing (to be implemented)
-│   └── __init__.py
-└── evaluation/             ← Evaluation scripts (to be implemented)
-    └── __init__.py
+│   ├── drivelm_dataset.py     ← Dataset loader (DriveLM / nuScenes)
+│   ├── preprocess.py          ← Prompt formatting & data contract
+│   └── README.md              ← Data setup instructions
+├── models/
+│   ├── __init__.py
+│   ├── baseline.py            ← QwenBaselineVLA (autoregressive)
+│   ├── fastdrive.py           ← FastDriveVLA (parallel DAG decoding + MCTSr)
+│   ├── dag_scheduler.py       ← DAG wave scheduler for parallel CoT
+│   └── hybrid.py              ← HybridVLA (adaptive routing)
+├── search/
+│   ├── __init__.py
+│   ├── mcts.py                ← MCTSNode + DagMCTSNode
+│   └── dag_scheduler.py       ← Reference DAG scheduler (paper Algorithm 1)
+├── evaluation/
+│   ├── __init__.py
+│   └── metrics.py             ← Meta-action IOU, trajectory ADE, CoT time
+└── tests/
+    ├── test_dag_scheduler_properties.py
+    └── test_mcts_properties.py
 ```
 
 ---
@@ -125,6 +136,7 @@ echo "HF_TOKEN=your_token_here" > .env
 - FastDriveCoT — parallel CoT decoding for autonomous driving VLAs
 - Snell et al. (2024) — Scaling LLM test-time compute optimally
 - MCTS for LLMs — Monte Carlo Tree Search for decision-making in language models
+- MCTSr — Monte Carlo Tree Self-Refine for LLM reasoning (Zhang et al., 2024)
 - DriveLM — Driving with Graph Visual Question Answering
 - BSFA — Block-Sparse FlashAttention for efficient sparse attention
 - Qwen2.5-VL — Alibaba open-weights multimodal model
