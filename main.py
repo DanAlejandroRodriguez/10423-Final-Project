@@ -9,9 +9,6 @@ Usage:
 
 import os
 import argparse
-from dotenv import load_dotenv
-load_dotenv()
-
 from data.drivelm_dataset import DriveLMDataset
 from data.preprocess import PromptFormatter
 from models.fastdrive import FastDriveVLA
