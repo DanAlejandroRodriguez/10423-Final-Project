@@ -15,13 +15,15 @@ from models.fastdrive import FastDriveVLA
 from models.hybrid import HybridVLA
 from evaluation import DriveLMEvaluator
 from evaluation.metrics import _print_summary
+import dotenv
+dotenv.load_dotenv()
 
 MODEL_NAMES = {0: "Baseline (AR)", 1: "FastDriveCoT", 2: "MCTS", 3: "Hybrid"}
 RESULT_KEYS = {0: "baseline_ar_", 1: "fastdrivecot_", 2: "mcts_k{k}_", 3: "hybrid_"}
 
 
 def find_real_frames(dataset, nuscenes_root, limit=None):
-    dataroot = os.path.dirname(nuscenes_root)
+    dataroot = nuscenes_root
     indices = []
     for i, entry in enumerate(dataset.scene_list):
         if limit and len(indices) >= limit:

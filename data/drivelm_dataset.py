@@ -31,13 +31,14 @@ class DriveLMDataset(Dataset):
         'CAM_BACK', 'CAM_BACK_LEFT', 'CAM_BACK_RIGHT'
     ]
 
-    def __init__(self, dataset_name="OpenDriveLab/DriveLM", split="train", nuscenes_img_dir="data/raw/nuscenes/samples"):
+    def __init__(self, dataset_name="OpenDriveLab/DriveLM", split="train", nuscenes_img_dir="data/raw/nuscenes"):
         """
         Initialization for loading DriveLM data.
         """
         self.img_dir = nuscenes_img_dir
         # self.nusc_version = "v1.0-mini" if "mini" in nuscenes_img_dir else "v1.0-trainval"
-        self.nusc_version = "v1.0-mini"
+        # self.nusc_version = "v1.0-mini"
+        self.nusc_version = "v1.0-trainval"
         
         dataroot = nuscenes_img_dir
         version_dir = os.path.join(dataroot, self.nusc_version)
@@ -136,7 +137,7 @@ class DriveLMDataset(Dataset):
                 try:
                     sample = self.nusc.get('sample', sample_token)
                     sd = self.nusc.get('sample_data', sample['data'][cam])
-                    img_path = os.path.join(os.path.dirname(self.img_dir), sd['filename'])
+                    img_path = os.path.join(self.img_dir, sd['filename'])
                     if os.path.exists(img_path):
                         img = Image.open(img_path).convert("RGB")
                 except Exception:

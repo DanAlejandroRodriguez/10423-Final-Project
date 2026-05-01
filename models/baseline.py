@@ -29,7 +29,7 @@ class QwenBaselineVLA:
         """
         driving_question = (
             "What should the ego vehicle do next? "
-            "Describe what you see briefly, then give the action and predicted trajectory.\n\n"
+            "Describe what you see briefly, then give the action and predicted trajectory from the current position in meters.\n\n"
             "Respond with:\n"
             "<cot> brief reasoning </cot>\n"
             "<action> STOP | YIELD | ACCELERATE | DECELERATE | TURN_LEFT | TURN_RIGHT | LANE_CHANGE </action>\n"
