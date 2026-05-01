@@ -32,11 +32,11 @@ class PromptFormatter:
     "## Tags\n"
     "<cot>\n"
     "  Step-by-step reasoning: describe scene conditions, hazards, intent, and "
-    "  how they inform the chosen action and trajectory.\n"
+    "  how they inform the chosen action and trajectory briefly in under 35 words.\n"
     "</cot>\n\n"
 
     "<action>\n"
-    "  Exactly one of: STOP | YIELD | ACCELERATE | DECELERATE | TURN_LEFT | TURN_RIGHT | LANE_CHANGE\n"
+    "  One or more of: STOP | YIELD | ACCELERATE | DECELERATE | TURN_LEFT | TURN_RIGHT | LANE_CHANGE\n"
     "</action>\n\n"
 
     "<trajectory>\n"

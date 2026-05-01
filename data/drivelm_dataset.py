@@ -37,7 +37,8 @@ class DriveLMDataset(Dataset):
         """
         self.img_dir = nuscenes_img_dir
         # self.nusc_version = "v1.0-mini" if "mini" in nuscenes_img_dir else "v1.0-trainval"
-        self.nusc_version = "v1.0-mini"
+        # self.nusc_version = "v1.0-mini"
+        self.nusc_version = "v1.0-trainval"
         
         dataroot = nuscenes_img_dir
         version_dir = os.path.join(dataroot, self.nusc_version)
