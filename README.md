@@ -126,6 +126,13 @@ pip install --no-deps nuscenes-devkit
 echo "HF_TOKEN=your_token_here" > .env
 
 # 6. Download DriveLM data — see data/README.md for instructions
+
+
+# 7. Run model
+python main.py --model 0 -- nuscenes_root [PATH_TO_DATASET(nuscenes/)] # baseline 
+python main.py --model 1 # fastdrivecot
+python main.py --model 2 # mcts
+python main.py --model 3 # hybrid
 ```
 
 ---
